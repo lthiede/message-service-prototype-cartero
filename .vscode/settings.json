@@ -2,7 +2,15 @@
     "cSpell.words": [
         "Acks",
         "cartero",
+        "extendee",
         "hasher",
-        "lthiede"
+        "Idxs",
+        "lthiede",
+        "protobuf",
+        "protoc",
+        "protodelim",
+        "protoimpl",
+        "protoreflect",
+        "waitc"
     ]
 }

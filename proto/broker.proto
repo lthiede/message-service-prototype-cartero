@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+// protoc --go_out=. --go_opt=paths=source_relative     --go-grpc_out=. --go-grpc_opt=paths=source_relative     ./proto/broker.proto
+
+option go_package = "github.com/lthiede/cartero/proto";
+
+service Broker {
+    rpc Produce(stream ProduceMessageBatch) returns (stream ProduceAck) {}
+    rpc Consume(stream ConsumeRequest) returns (stream ConsumeResponse) {}
+}
+
+message ProduceMessageBatch {
+    uint64 batch_id = 1;
+    Messages messages = 2;
+}
+
+message Messages {
+    repeated bytes messages = 1;
+}
+
+message ProduceAck {
+    uint64 batch_id = 1;
+    uint64 start_offset = 2;
+    uint64 end_offset = 3;
+}
+
+message ConsumeRequest {
+    uint64 start_offset = 2;
+}
+
+message ConsumeResponse {
+    ConsumeMessageBatch consumeMessageBatch = 1;
+    RedirectResponse redirectResponse = 2;
+    bool is_redirect_response = 3;
+}
+
+message ConsumeMessageBatch {
+    Messages messages = 1;
+    uint64 start_offset = 2;
+    uint64 end_offset = 3;
+}
+
+message RedirectResponse {
+    uint64 save_end_offset = 1;
+}

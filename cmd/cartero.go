@@ -18,11 +18,10 @@ func main() {
 		log.Panicf("Error creating logger: %v", err)
 	}
 	defer logger.Sync()
-	server, err := server.New(logger)
+	server, err := server.New([]string{"partition0", "partition1", "partition2"}, logger)
 	if err != nil {
 		logger.Panic("Error creating server", zap.Error(err))
 	}
-	go server.ListenAndAccept()
 	defer server.Close()
 	<-c
 }

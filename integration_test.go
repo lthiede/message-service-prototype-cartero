@@ -20,7 +20,7 @@ func setupServer(partitionNames []string) (*server.Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	server, err := server.New(partitionNames, logger)
+	server, err := server.New(partitionNames, "localhost:8080", logger)
 	if err != nil {
 		return nil, err
 	}

@@ -3,6 +3,7 @@ package partition
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/lthiede/cartero/cache"
 	pb "github.com/lthiede/cartero/proto"
@@ -30,7 +31,12 @@ type ProduceRequest struct {
 
 func New(name string, cache *cache.Cache, logger *zap.Logger) (*Partition, error) {
 	logger.Info("Creating new partition", zap.String("partitionName", name))
-	file, err := os.Create(fmt.Sprintf("/home/lorenz/Desktop/Master_Thesis/cartero/data/%s", name))
+	path := filepath.Join(".", "data")
+	err := os.MkdirAll(path, os.ModePerm)
+	if err != nil {
+		return nil, fmt.Errorf("error creating storage directory: %v", err)
+	}
+	file, err := os.Create(fmt.Sprintf("data/%s", name))
 	if err != nil {
 		return nil, fmt.Errorf("error creating the storage file: %v", err)
 	}

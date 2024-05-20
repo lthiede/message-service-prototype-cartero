@@ -1,8 +1,10 @@
 package client
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"time"
 
 	pb "github.com/lthiede/cartero/proto"
 	"go.uber.org/zap"
@@ -52,6 +54,21 @@ func New(address string, logger *zap.Logger) (*Client, error) {
 		conn:       conn,
 		grpcClient: grpcClient,
 	}, nil
+}
+
+func (c *Client) PingPong() error {
+	_, err := c.grpcClient.PingPong(context.Background(), &pb.Ping{})
+	return err
+}
+
+func (c *Client) TimedPingPong() (time.Duration, error) {
+	start := time.Now()
+	_, err := c.grpcClient.PingPong(context.Background(), &pb.Ping{})
+	end := time.Now()
+	if err != nil {
+		return 0, err
+	}
+	return end.Sub(start), nil
 }
 
 func (c *Client) Close() error {

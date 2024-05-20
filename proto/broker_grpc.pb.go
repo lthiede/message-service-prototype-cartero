@@ -24,6 +24,7 @@ const _ = grpc.SupportPackageIsVersion7
 type BrokerClient interface {
 	Produce(ctx context.Context, opts ...grpc.CallOption) (Broker_ProduceClient, error)
 	Consume(ctx context.Context, opts ...grpc.CallOption) (Broker_ConsumeClient, error)
+	PingPong(ctx context.Context, in *Ping, opts ...grpc.CallOption) (*Pong, error)
 }
 
 type brokerClient struct {
@@ -96,12 +97,22 @@ func (x *brokerConsumeClient) Recv() (*ConsumeResponse, error) {
 	return m, nil
 }
 
+func (c *brokerClient) PingPong(ctx context.Context, in *Ping, opts ...grpc.CallOption) (*Pong, error) {
+	out := new(Pong)
+	err := c.cc.Invoke(ctx, "/Broker/PingPong", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BrokerServer is the server API for Broker service.
 // All implementations must embed UnimplementedBrokerServer
 // for forward compatibility
 type BrokerServer interface {
 	Produce(Broker_ProduceServer) error
 	Consume(Broker_ConsumeServer) error
+	PingPong(context.Context, *Ping) (*Pong, error)
 	mustEmbedUnimplementedBrokerServer()
 }
 
@@ -114,6 +125,9 @@ func (UnimplementedBrokerServer) Produce(Broker_ProduceServer) error {
 }
 func (UnimplementedBrokerServer) Consume(Broker_ConsumeServer) error {
 	return status.Errorf(codes.Unimplemented, "method Consume not implemented")
+}
+func (UnimplementedBrokerServer) PingPong(context.Context, *Ping) (*Pong, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PingPong not implemented")
 }
 func (UnimplementedBrokerServer) mustEmbedUnimplementedBrokerServer() {}
 
@@ -180,13 +194,36 @@ func (x *brokerConsumeServer) Recv() (*ConsumeRequest, error) {
 	return m, nil
 }
 
+func _Broker_PingPong_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Ping)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BrokerServer).PingPong(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/Broker/PingPong",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BrokerServer).PingPong(ctx, req.(*Ping))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Broker_ServiceDesc is the grpc.ServiceDesc for Broker service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var Broker_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "Broker",
 	HandlerType: (*BrokerServer)(nil),
-	Methods:     []grpc.MethodDesc{},
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "PingPong",
+			Handler:    _Broker_PingPong_Handler,
+		},
+	},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "Produce",

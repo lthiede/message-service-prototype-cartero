@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -26,7 +27,7 @@ type Server struct {
 	cache      *cache.Cache
 }
 
-func New(partitionNames []string, logger *zap.Logger) (*Server, error) {
+func New(partitionNames []string, address string, logger *zap.Logger) (*Server, error) {
 	logger.Info("Creating new server")
 	cache := cache.New(partitionNames, logger)
 	partitions := map[string]partition.Partition{}
@@ -43,11 +44,11 @@ func New(partitionNames []string, logger *zap.Logger) (*Server, error) {
 		partitions: partitions,
 		cache:      cache,
 	}
-	l, err := net.Listen("tcp", "localhost:8080")
+	l, err := net.Listen("tcp", address)
 	if err != nil {
-		return nil, fmt.Errorf("error trying to listen on localhost:8080: %v", zap.Error(err))
+		return nil, fmt.Errorf("error trying to listen on %s: %v", address, zap.Error(err))
 	}
-	s.logger.Info("Accepting connections on localhost:8080")
+	s.logger.Info("Accepting connections", zap.String("address", address))
 	pb.RegisterBrokerServer(s.grpcServer, s)
 	go s.grpcServer.Serve(l)
 	return s, nil
@@ -197,6 +198,10 @@ func (s *Server) handleIncomingConsumeRequests(stream pb.Broker_ConsumeServer, p
 		}
 		alreadyReadingFromCache = true
 	}
+}
+
+func (s *Server) PingPong(ctx context.Context, in *pb.Ping) (*pb.Pong, error) {
+	return &pb.Pong{}, nil
 }
 
 func (s *Server) Close() error {

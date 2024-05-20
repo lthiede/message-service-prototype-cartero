@@ -14,8 +14,8 @@ import (
 )
 
 /*
-Results:
-8 client server with 125 clients each
+Results without synchronization:
+8 client servers with 125 clients each
 dm-c01
 length: 28787,
 	p50 index: 14393 value: 1359 mus,
@@ -71,6 +71,64 @@ length: 102804,
 	p90 index: 92523 value: 868 mus,
 	p95 index: 97663 value: 1430 mus,
 	p99 index: 101775 value: 2549 mus
+
+Results with all requests synchronized through channel:
+8 client servers with 125 clients each
+dm-c01
+length: 22735,
+	p50 index: 11367 value: 2023 mus,
+	p90 index: 20461 value: 5059 mus,
+	p95 index: 21597 value: 7902 mus,
+	p99 index: 22507 value: 24342 mus
+dm-c02
+length: 25938,
+	p50 index: 12968 value: 2032 mus,
+	p90 index: 23343 value: 4650 mus,
+	p95 index: 24640 value: 7295 mus,
+	p99 index: 25678 value: 22756 mus
+dm-c03
+length: 25742,
+	p50 index: 12870 value: 1982 mus,
+	p90 index: 23167 value: 4682 mus,
+	p95 index: 24454 value: 7218 mus,
+	p99 index: 25484 value: 22805 mus
+dm-c04
+length: 25919,
+	p50 index: 12959 value: 1986 mus,
+	p90 index: 23326 value: 4628 mus,
+	p95 index: 24622 value: 7320 mus,
+	p99 index: 25659 value: 22911 mus
+dm-c05
+length: 25934,
+	p50 index: 12966 value: 2004 mus,
+	p90 index: 23340 value: 4745 mus,
+	p95 index: 24636 value: 7325 mus,
+	p99 index: 25674 value: 23027 mus
+dm-c06
+length: 25306,
+	p50 index: 12652 value: 1994 mus,
+	p90 index: 22774 value: 4950 mus,
+	p95 index: 24040 value: 7311 mus,
+	p99 index: 25052 value: 23190 mus
+dm-c07
+length: 24345,
+	p50 index: 12172 value: 2022 mus,
+	p90 index: 21910 value: 5898 mus,
+	p95 index: 23127 value: 7882 mus,
+	p99 index: 24101 value: 23749 mus
+dm-c08
+length: 27424,
+	p50 index: 13711 value: 1971 mus,
+	p90 index: 24681 value: 3298 mus,
+	p95 index: 26052 value: 6592 mus,
+	p99 index: 27149 value: 21950 mus
+1 client server with 125 clients
+dm-c01
+length: 94035,
+	p50 index: 47017 value: 328 mus,
+	p90 index: 84631 value: 1146 mus,
+	p95 index: 89332 value: 1572 mus,
+	p99 index: 93094 value: 2628 mus
 */
 
 const NumberClients = 125

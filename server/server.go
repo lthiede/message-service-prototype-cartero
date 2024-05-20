@@ -21,10 +21,12 @@ const PartitionNameMetadataKey string = "cartero.produce.partition_name"
 // TODO: make sure everything is closed correctly
 type Server struct {
 	pb.UnimplementedBrokerServer
-	logger     *zap.Logger
-	grpcServer *grpc.Server
-	partitions map[string]partition.Partition
-	cache      *cache.Cache
+	logger           *zap.Logger
+	grpcServer       *grpc.Server
+	partitions       map[string]partition.Partition
+	cache            *cache.Cache
+	pingPongChan     chan struct{}
+	quitPingPongChan chan struct{}
 }
 
 func New(partitionNames []string, address string, logger *zap.Logger) (*Server, error) {
@@ -39,10 +41,11 @@ func New(partitionNames []string, address string, logger *zap.Logger) (*Server, 
 		partitions[partitionName] = *p
 	}
 	s := &Server{
-		logger:     logger,
-		grpcServer: grpc.NewServer(),
-		partitions: partitions,
-		cache:      cache,
+		logger:       logger,
+		grpcServer:   grpc.NewServer(),
+		partitions:   partitions,
+		cache:        cache,
+		pingPongChan: make(chan struct{}),
 	}
 	l, err := net.Listen("tcp", address)
 	if err != nil {
@@ -51,6 +54,7 @@ func New(partitionNames []string, address string, logger *zap.Logger) (*Server, 
 	s.logger.Info("Accepting connections", zap.String("address", address))
 	pb.RegisterBrokerServer(s.grpcServer, s)
 	go s.grpcServer.Serve(l)
+	go s.handlePingPongChan()
 	return s, nil
 }
 
@@ -201,7 +205,18 @@ func (s *Server) handleIncomingConsumeRequests(stream pb.Broker_ConsumeServer, p
 }
 
 func (s *Server) PingPong(ctx context.Context, in *pb.Ping) (*pb.Pong, error) {
+	s.pingPongChan <- struct{}{}
 	return &pb.Pong{}, nil
+}
+
+func (s *Server) handlePingPongChan() {
+	for {
+		select {
+		case <-s.pingPongChan:
+		case <-s.quitPingPongChan:
+			return
+		}
+	}
 }
 
 func (s *Server) Close() error {
@@ -213,5 +228,6 @@ func (s *Server) Close() error {
 			s.logger.Error("Error closing partition", zap.String("partitionName", name), zap.Error(err))
 		}
 	}
+	close(s.quitPingPongChan)
 	return s.cache.Close()
 }

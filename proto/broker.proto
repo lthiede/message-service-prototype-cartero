@@ -7,7 +7,10 @@ option go_package = "github.com/lthiede/cartero/proto";
 service Broker {
     rpc Produce(stream ProduceMessageBatch) returns (stream ProduceAck) {}
     rpc Consume(stream ConsumeRequest) returns (stream ConsumeResponse) {}
-    rpc PingPong(Ping) returns (Pong) {}
+    rpc UnaryPingPong(Ping) returns (Pong) {}
+    rpc UnaryPingPongSync(Ping) returns (Pong) {}
+    rpc StreamPingPong(stream Ping) returns (stream Pong) {}
+    rpc StreamPingPongSync(stream Ping) returns (stream Pong) {}
 }
 
 message ProduceMessageBatch {

@@ -7,6 +7,7 @@ import (
 	"net"
 
 	"github.com/lthiede/cartero/cache"
+	codec "github.com/lthiede/cartero/experiments/codec"
 	"github.com/lthiede/cartero/partition"
 	pb "github.com/lthiede/cartero/proto"
 	"go.uber.org/zap"
@@ -21,12 +22,12 @@ const PartitionNameMetadataKey string = "cartero.produce.partition_name"
 // TODO: make sure everything is closed correctly
 type Server struct {
 	pb.UnimplementedBrokerServer
-	logger           *zap.Logger
-	grpcServer       *grpc.Server
-	partitions       map[string]partition.Partition
-	cache            *cache.Cache
-	pingPongChan     chan struct{}
-	quitPingPongChan chan struct{}
+	logger                    *zap.Logger
+	grpcServer                *grpc.Server
+	partitions                map[string]partition.Partition
+	cache                     *cache.Cache
+	pingPongPartitionChan     chan struct{}
+	quitPingPongPartitionChan chan struct{}
 }
 
 func New(partitionNames []string, address string, logger *zap.Logger) (*Server, error) {
@@ -41,11 +42,12 @@ func New(partitionNames []string, address string, logger *zap.Logger) (*Server, 
 		partitions[partitionName] = *p
 	}
 	s := &Server{
-		logger:       logger,
-		grpcServer:   grpc.NewServer(),
-		partitions:   partitions,
-		cache:        cache,
-		pingPongChan: make(chan struct{}),
+		logger:                    logger,
+		grpcServer:                grpc.NewServer(),
+		partitions:                partitions,
+		cache:                     cache,
+		pingPongPartitionChan:     make(chan struct{}),
+		quitPingPongPartitionChan: make(chan struct{}),
 	}
 	l, err := net.Listen("tcp", address)
 	if err != nil {
@@ -53,6 +55,7 @@ func New(partitionNames []string, address string, logger *zap.Logger) (*Server, 
 	}
 	s.logger.Info("Accepting connections", zap.String("address", address))
 	pb.RegisterBrokerServer(s.grpcServer, s)
+	s.logger.Info("Did codec initialize", zap.Bool("didInitRun", codec.DidInitRun))
 	go s.grpcServer.Serve(l)
 	go s.handlePingPongChan()
 	return s, nil
@@ -204,16 +207,41 @@ func (s *Server) handleIncomingConsumeRequests(stream pb.Broker_ConsumeServer, p
 	}
 }
 
-func (s *Server) PingPong(ctx context.Context, in *pb.Ping) (*pb.Pong, error) {
-	s.pingPongChan <- struct{}{}
+func (s *Server) UnaryPingPong(ctx context.Context, ping *pb.Ping) (*pb.Pong, error) {
 	return &pb.Pong{}, nil
+}
+
+func (s *Server) UnaryPingPongSync(ctx context.Context, ping *pb.Ping) (*pb.Pong, error) {
+	s.pingPongPartitionChan <- struct{}{}
+	return &pb.Pong{}, nil
+}
+
+func (s *Server) StreamPingPong(stream pb.Broker_StreamPingPongServer) error {
+	for {
+		_, err := stream.Recv()
+		if err != nil {
+			return err
+		}
+		stream.Send(&pb.Pong{})
+	}
+}
+
+func (s *Server) StreamPingPongSync(stream pb.Broker_StreamPingPongSyncServer) error {
+	for {
+		_, err := stream.Recv()
+		if err != nil {
+			return err
+		}
+		s.pingPongPartitionChan <- struct{}{}
+		stream.Send(&pb.Pong{})
+	}
 }
 
 func (s *Server) handlePingPongChan() {
 	for {
 		select {
-		case <-s.pingPongChan:
-		case <-s.quitPingPongChan:
+		case <-s.pingPongPartitionChan:
+		case <-s.quitPingPongPartitionChan:
 			return
 		}
 	}
@@ -228,6 +256,6 @@ func (s *Server) Close() error {
 			s.logger.Error("Error closing partition", zap.String("partitionName", name), zap.Error(err))
 		}
 	}
-	close(s.quitPingPongChan)
+	close(s.quitPingPongPartitionChan)
 	return s.cache.Close()
 }

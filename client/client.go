@@ -2,10 +2,12 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
-	"time"
+	"net"
 
+	"github.com/lthiede/cartero/experiments/codec"
 	pb "github.com/lthiede/cartero/proto"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -42,7 +44,37 @@ type Client struct {
 }
 
 func New(address string, logger *zap.Logger) (*Client, error) {
+	return NewWithOptions(address, "", "", true, logger)
+}
+
+func NewWithOptions(address string, localAddr string, codecName string, noDelay bool, logger *zap.Logger) (*Client, error) {
 	opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
+	if codecName != "" {
+		logger.Info("Using codec", zap.String("codec", codecName), zap.Bool("didInitRun", codec.DidInitRun))
+		opts = append(opts, grpc.WithDefaultCallOptions(grpc.CallContentSubtype(codecName)))
+		opts = append(opts, grpc.WithDefaultCallOptions(grpc.ForceCodec(&codec.TestCodec{})))
+	}
+	if localAddr != "" {
+		dialer := &net.Dialer{
+			LocalAddr: &net.TCPAddr{
+				IP:   net.ParseIP(localAddr),
+				Port: 0,
+			},
+		}
+		logger.Info("Using local address", zap.String("localAddress", localAddr))
+		opts = append(opts, grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
+			conn, err := dialer.DialContext(ctx, "tcp", addr)
+			if err != nil {
+				return nil, err
+			}
+			tcpConn, ok := conn.(*net.TCPConn)
+			if !ok {
+				return nil, errors.New("error casting connection to conn to *net.TCPConn")
+			}
+			tcpConn.SetNoDelay(noDelay)
+			return tcpConn, nil
+		}))
+	}
 	conn, err := grpc.Dial(address, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial server: %v", err)
@@ -54,21 +86,6 @@ func New(address string, logger *zap.Logger) (*Client, error) {
 		conn:       conn,
 		grpcClient: grpcClient,
 	}, nil
-}
-
-func (c *Client) PingPong() error {
-	_, err := c.grpcClient.PingPong(context.Background(), &pb.Ping{})
-	return err
-}
-
-func (c *Client) TimedPingPong() (time.Duration, error) {
-	start := time.Now()
-	_, err := c.grpcClient.PingPong(context.Background(), &pb.Ping{})
-	end := time.Now()
-	if err != nil {
-		return 0, err
-	}
-	return end.Sub(start), nil
 }
 
 func (c *Client) Close() error {

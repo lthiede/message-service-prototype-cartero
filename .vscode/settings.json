@@ -7,11 +7,14 @@
         "Idxs",
         "informatik",
         "lthiede",
+        "oneof",
+        "partitionmanager",
         "protobuf",
         "protoc",
         "protodelim",
         "protoimpl",
         "protoreflect",
+        "Unmarshaled",
         "waitc"
     ]
 }

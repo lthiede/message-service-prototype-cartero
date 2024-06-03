@@ -3,6 +3,7 @@ package cartero_test
 import (
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"testing"
 	"time"
@@ -29,7 +30,7 @@ func setupServer(partitionNames []string) (*server.Server, error) {
 
 func setupClient() (*client.Client, error) {
 	config := zap.NewDevelopmentConfig()
-	config.Level.SetLevel(zapcore.ErrorLevel)
+	config.Level.SetLevel(zapcore.InfoLevel)
 	logger, err := config.Build()
 	if err != nil {
 		return nil, err
@@ -41,11 +42,12 @@ func setupClient() (*client.Client, error) {
 	return client, nil
 }
 
-func produce(numberMessages int, partitionName string, client *client.Client, lowerFrequency bool, wg *sync.WaitGroup, errChan chan<- error) {
+func produce(numberMessages int, partitionName string, client *client.Client, maxInFlight int, wg *sync.WaitGroup, errChan chan<- error) {
 	producer, err := client.NewProducer(partitionName)
 	if err != nil {
 		errChan <- err
 		wg.Done()
+		log.Println("Failed to create producer")
 		return
 	}
 	defer producer.Close()
@@ -54,48 +56,59 @@ func produce(numberMessages int, partitionName string, client *client.Client, lo
 		time.Sleep(20 * time.Second)
 		close(timeout)
 	}()
-	produceErrChan := make(chan error)
-	go func() {
-		for numberProduced := 0; numberProduced < numberMessages; numberProduced++ {
-			if lowerFrequency && numberProduced%7 == 0 {
-				time.Sleep(200 * time.Millisecond)
-			}
-			currentMessage := []byte(fmt.Sprintf("%s_%d", partitionName, numberProduced))
+	numberAck := 0
+	inFlight := 0
+	for numberProduced := 0; numberProduced < numberMessages; numberProduced++ {
+		currentMessage := []byte(fmt.Sprintf("%s_%d", partitionName, numberProduced))
+		select {
+		case producer.Input <- currentMessage:
+			inFlight++
+		case <-timeout:
+			errChan <- errors.New("Produce timed out")
+			wg.Done()
+			log.Println("Produce timed out")
+			return
+		}
+		if inFlight == maxInFlight {
 			select {
-			case producer.Input <- currentMessage:
+			case ack := <-producer.AckOutput:
+				log.Printf("batch %d acknowledged %d messages in total", ack.BatchId, int(ack.NumMessagesAck))
+				numberAck = int(ack.NumMessagesAck)
+			case err := <-producer.Error:
+				errChan <- err.Err
+				wg.Done()
+				log.Println("Received error waiting for acks because max in flight requests reached")
+				return
 			case <-timeout:
-				produceErrChan <- errors.New("Produce timed out")
+				errChan <- errors.New("Waiting for acks timed out")
+				wg.Done()
+				log.Println("Received timeout waiting for acks because max in flight requests reached")
 				return
 			}
-		}
-		close(produceErrChan)
-	}()
-	var receiveAckErr error
-waitingForAcks:
-	for numberAck := 0; numberAck < numberMessages; {
-		select {
-		case <-producer.Ack:
-			numberAck++
-		case err := <-producer.Error:
-			receiveAckErr = err.Err
-			break waitingForAcks
-		case <-timeout:
-			receiveAckErr = errors.New("Waiting for acks timed out")
-			break waitingForAcks
+			inFlight = 0
 		}
 	}
-	produceErr := <-produceErrChan
-	if receiveAckErr != nil && produceErr != nil {
-		errChan <- fmt.Errorf("produce error %v, ack error %v", produceErr, receiveAckErr)
-	} else if receiveAckErr != nil {
-		errChan <- receiveAckErr
-	} else if produceErr != nil {
-		errChan <- produceErr
+	for numberAck < numberMessages {
+		select {
+		case ack := <-producer.AckOutput:
+			numberAck = int(ack.NumMessagesAck)
+		case err := <-producer.Error:
+			errChan <- err.Err
+			wg.Done()
+			log.Println("Received error waiting for acks because all batches produced")
+			return
+		case <-timeout:
+			errChan <- errors.New("Waiting for acks timed out")
+			wg.Done()
+			log.Println("Received timeout waiting for acks because all batches produced")
+			return
+		}
 	}
 	wg.Done()
+	log.Println("Exiting naturally")
 }
 
-func consume(numberMessages int, startOffset int, partitionName string, client *client.Client, checkContent bool, wg *sync.WaitGroup, errChan chan<- error) {
+func consume(numberMessages int, startOffset uint64, partitionName string, client *client.Client, wg *sync.WaitGroup, errChan chan<- error) {
 	consumer, err := client.NewConsumer(partitionName, uint64(startOffset))
 	if err != nil {
 		errChan <- err
@@ -108,15 +121,11 @@ func consume(numberMessages int, startOffset int, partitionName string, client *
 		time.Sleep(20 * time.Second)
 		close(timeout)
 	}()
-	for numberConsumed := 0; numberConsumed < numberMessages; numberConsumed++ {
+	for endOfSafeOffsets := startOffset; endOfSafeOffsets < startOffset+uint64(numberMessages); {
 		select {
-		case message := <-consumer.Output:
-			if !checkContent {
-				continue
-			}
-			expectedMessage := fmt.Sprintf("%s_%d", partitionName, numberConsumed+startOffset)
-			if string(message.Message) != expectedMessage {
-				errChan <- fmt.Errorf("Received unexpected message %s, expected %s", string(message.Message), expectedMessage)
+		case endOfSafeOffsets = <-consumer.EndOfSafeOffsetsExclusivelyOut:
+			if endOfSafeOffsets < startOffset {
+				errChan <- errors.New("Received offset notification for offset < startOffset")
 				wg.Done()
 				return
 			}
@@ -149,10 +158,10 @@ func TestBasicHappyCase(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(4)
 	errChan := make(chan error, 4)
-	go produce(100, "partition0", producerClient, false, &wg, errChan)
-	go produce(100, "partition1", producerClient, false, &wg, errChan)
-	go consume(100, 0, "partition0", consumerClient, true, &wg, errChan)
-	go consume(100, 0, "partition1", consumerClient, true, &wg, errChan)
+	go produce(100, "partition0", producerClient, 20, &wg, errChan)
+	go produce(100, "partition1", producerClient, 20, &wg, errChan)
+	go consume(100, 0, "partition0", consumerClient, &wg, errChan)
+	go consume(100, 0, "partition1", consumerClient, &wg, errChan)
 	wg.Wait()
 	for {
 		select {
@@ -184,10 +193,10 @@ func TestPubSub(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(4)
 	errChan := make(chan error, 4)
-	go produce(100, "partition0", client0, false, &wg, errChan)
-	go produce(100, "partition0", client1, false, &wg, errChan)
-	go consume(200, 0, "partition0", client0, false, &wg, errChan)
-	go consume(200, 0, "partition0", client1, false, &wg, errChan)
+	go produce(100, "partition0", client0, 50, &wg, errChan)
+	go produce(100, "partition0", client1, 50, &wg, errChan)
+	go consume(200, 0, "partition0", client0, &wg, errChan)
+	go consume(200, 0, "partition0", client1, &wg, errChan)
 	wg.Wait()
 	for {
 		select {
@@ -218,9 +227,10 @@ func TestMaxPublishDelay(t *testing.T) {
 	defer client1.Close()
 	var wg sync.WaitGroup
 	wg.Add(2)
-	errChan := make(chan error, 4)
-	go produce(30, "partition0", client1, true, &wg, errChan)
-	go consume(30, 0, "partition0", client0, true, &wg, errChan)
+	errChan := make(chan error, 2)
+	go produce(30, "partition0", client1, 5, &wg, errChan)
+	time.Sleep(10 * time.Second)
+	go consume(30, 0, "partition0", client0, &wg, errChan)
 	wg.Wait()
 	for {
 		select {
@@ -251,9 +261,9 @@ func TestReadingFromStartOffset(t *testing.T) {
 	defer client1.Close()
 	var wg sync.WaitGroup
 	wg.Add(2)
-	errChan := make(chan error, 4)
-	go produce(30, "partition0", client1, true, &wg, errChan)
-	go consume(15, 15, "partition0", client0, true, &wg, errChan)
+	errChan := make(chan error, 2)
+	go produce(30, "partition0", client1, 7, &wg, errChan)
+	go consume(15, 15, "partition0", client0, &wg, errChan)
 	wg.Wait()
 	for {
 		select {
@@ -265,5 +275,39 @@ func TestReadingFromStartOffset(t *testing.T) {
 	}
 }
 
-// TODO: test offset out of cache
-// TODO: test removing producers
+// TestAddingPartitions tests adding partitions to the running server
+func TestAddingPartitions(t *testing.T) {
+	server, err := setupServer([]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	client0, err := setupClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client0.Close()
+	client1, err := setupClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client1.Close()
+	err = client0.CreatePartition("testpartition")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	wg.Add(2)
+	errChan := make(chan error, 2)
+	go produce(100, "testpartition", client0, 20, &wg, errChan)
+	go consume(100, 0, "testpartition", client1, &wg, errChan)
+	wg.Wait()
+	for {
+		select {
+		case err := <-errChan:
+			t.Error(err)
+		default:
+			return
+		}
+	}
+}

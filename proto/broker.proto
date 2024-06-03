@@ -4,50 +4,65 @@ syntax = "proto3";
 
 option go_package = "github.com/lthiede/cartero/proto";
 
-service Broker {
-    rpc Produce(stream ProduceMessageBatch) returns (stream ProduceAck) {}
-    rpc Consume(stream ConsumeRequest) returns (stream ConsumeResponse) {}
-    rpc UnaryPingPong(Ping) returns (Pong) {}
-    rpc UnaryPingPongSync(Ping) returns (Pong) {}
-    rpc StreamPingPong(stream Ping) returns (stream Pong) {}
-    rpc StreamPingPongSync(stream Ping) returns (stream Pong) {}
+message Request {
+    oneof request {
+        ProduceRequest produce_request = 1;
+        ConsumeRequest consume_request = 2;
+        CreatePartitionRequest create_partition_request = 3;
+        PingPongRequest ping_pong_request = 4;
+    }
 }
 
-message ProduceMessageBatch {
+message ProduceRequest {
     uint64 batch_id = 1;
-    Messages messages = 2;
+    string partition_name = 2;
+    Messages messages = 3;
 }
 
 message Messages {
     repeated bytes messages = 1;
 }
 
+message ConsumeRequest {
+    uint64 start_offset = 1;
+    string partition_name = 2;
+    uint32 min_num_messages = 3; 
+}
+
+message CreatePartitionRequest {
+    string partition_name = 1;
+}
+
+message PingPongRequest {
+    string partition_name = 1;
+}
+
+message Response {
+    oneof response {
+        ProduceAck produce_ack = 1;
+        ConsumeResponse consume_response = 2;
+        CreatePartitionResponse create_partition_response = 3;
+        PingPongResponse ping_pong_response = 4;
+    }
+}
+
 message ProduceAck {
     uint64 batch_id = 1;
     uint64 start_offset = 2;
     uint64 end_offset = 3;
-}
-
-message ConsumeRequest {
-    uint64 start_offset = 2;
+    string partition_name = 4;
 }
 
 message ConsumeResponse {
-    ConsumeMessageBatch consumeMessageBatch = 1;
-    RedirectResponse redirectResponse = 2;
-    bool is_redirect_response = 3;
+    uint64 end_of_safe_offsets_exclusively = 1;
+    string partition_name = 2;
 }
 
-message ConsumeMessageBatch {
-    Messages messages = 1;
-    uint64 start_offset = 2;
-    uint64 end_offset = 3;
+message CreatePartitionResponse {
+    bool successful = 1;
+    string partition_name = 2;
 }
 
-message RedirectResponse {
-    uint64 save_end_offset = 1;
+message PingPongResponse {
+    string partition_name = 1;
 }
-
-message Ping{}
-
-message Pong{}

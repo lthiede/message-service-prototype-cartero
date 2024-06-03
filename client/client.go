@@ -1,91 +1,127 @@
 package client
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"log"
 	"net"
+	"sync"
+	"time"
 
-	"github.com/lthiede/cartero/experiments/codec"
 	pb "github.com/lthiede/cartero/proto"
+	"github.com/lthiede/cartero/readertobytereader"
 	"go.uber.org/zap"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/encoding/protodelim"
 )
 
-/*
-Kafka Java:
-Separate Producer and Consumer
-Producer.send(ProducerRecord(topic, key, value), callback)
-Consumer.subscribe(topics)
-ConsumerRecords = Consumer.poll()
-
-Kafka Confluent Go:
-Separate Producer and Consumer
-Producer.send(ProducerRecord(topic, key, value))
-Event chan for acks
-Consumer.subscribe(topics)
-ConsumerRecords = Consumer.poll()
-
-Kafka Sarama:
-Separate Producer and Consumer
-AsyncProducer receives ProducerMessage(topic, value) on Input chan
-Error and Success chan
-partition, offset, err = SyncProducer.SendMessage(ProducerMessage(topic, value))
-partitionConsumer = consumePartition(partition)
-chan for messages
-*/
-
 type Client struct {
-	logger     *zap.Logger
-	conn       *grpc.ClientConn
-	grpcClient pb.BrokerClient
+	logger                     *zap.Logger
+	conn                       net.Conn
+	producers                  map[string]*Producer
+	producersRWMutex           sync.RWMutex
+	pingPongs                  map[string]*PingPong
+	pingPongsRWMutex           sync.RWMutex
+	consumers                  map[string]*Consumer
+	consumersRWMutex           sync.RWMutex
+	expectedCreatePartitionRes map[string]chan bool
+	done                       chan struct{}
 }
+
+const timeout time.Duration = 60 * time.Second
 
 func New(address string, logger *zap.Logger) (*Client, error) {
-	return NewWithOptions(address, "", "", true, logger)
+	return NewWithOptions(address, "" /*localAddr*/, logger)
 }
 
-func NewWithOptions(address string, localAddr string, codecName string, noDelay bool, logger *zap.Logger) (*Client, error) {
-	opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
-	if codecName != "" {
-		logger.Info("Using codec", zap.String("codec", codecName), zap.Bool("didInitRun", codec.DidInitRun))
-		opts = append(opts, grpc.WithDefaultCallOptions(grpc.CallContentSubtype(codecName)))
-		opts = append(opts, grpc.WithDefaultCallOptions(grpc.ForceCodec(&codec.TestCodec{})))
-	}
+func NewWithOptions(address string, localAddr string, logger *zap.Logger) (*Client, error) {
+	dialer := &net.Dialer{}
 	if localAddr != "" {
-		dialer := &net.Dialer{
-			LocalAddr: &net.TCPAddr{
-				IP:   net.ParseIP(localAddr),
-				Port: 0,
-			},
+		dialer.LocalAddr = &net.TCPAddr{
+			IP:   net.ParseIP(localAddr),
+			Port: 0,
 		}
 		logger.Info("Using local address", zap.String("localAddress", localAddr))
-		opts = append(opts, grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
-			conn, err := dialer.DialContext(ctx, "tcp", addr)
-			if err != nil {
-				return nil, err
-			}
-			tcpConn, ok := conn.(*net.TCPConn)
-			if !ok {
-				return nil, errors.New("error casting connection to conn to *net.TCPConn")
-			}
-			tcpConn.SetNoDelay(noDelay)
-			return tcpConn, nil
-		}))
 	}
-	conn, err := grpc.Dial(address, opts...)
+	conn, err := dialer.Dial("tcp", address)
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial server: %v", err)
 	}
 	logger.Info("Dialed server", zap.String("address", address))
-	grpcClient := pb.NewBrokerClient(conn)
-	return &Client{
-		logger:     logger,
-		conn:       conn,
-		grpcClient: grpcClient,
-	}, nil
+	client := &Client{
+		logger:                     logger,
+		conn:                       conn,
+		producers:                  map[string]*Producer{},
+		pingPongs:                  map[string]*PingPong{},
+		consumers:                  map[string]*Consumer{},
+		expectedCreatePartitionRes: map[string]chan bool{},
+		done:                       make(chan struct{}),
+	}
+	go client.handleResponses()
+	return client, nil
+}
+
+func (c *Client) handleResponses() {
+	for {
+		select {
+		case <-c.done:
+			c.logger.Info("Stop handling responses")
+			return
+		default:
+			c.conn.SetDeadline(time.Now().Add(timeout))
+			response := &pb.Response{}
+			err := protodelim.UnmarshalFrom(&readertobytereader.ReaderByteReader{Conn: c.conn}, response)
+			if err != nil {
+				c.logger.Error("Failed to unmarshal response", zap.Error(err))
+				return
+			}
+			switch res := response.Response.(type) {
+			case *pb.Response_ProduceAck:
+				produceAck := res.ProduceAck
+				c.producersRWMutex.RLock()
+				p, ok := c.producers[produceAck.PartitionName]
+				if !ok {
+					c.logger.Error("Partition not recognized", zap.String("partitionName", produceAck.PartitionName))
+					continue
+				}
+				c.logger.Info("Received ack", zap.Uint64("batchId", produceAck.BatchId), zap.Uint64("numberMessages", produceAck.EndOffset-produceAck.StartOffset))
+				p.AckInput <- ProduceAck{
+					BatchId:        produceAck.BatchId,
+					NumMessagesAck: produceAck.EndOffset - produceAck.StartOffset,
+				}
+				c.producersRWMutex.RUnlock()
+			case *pb.Response_PingPongResponse:
+				pingPongRes := res.PingPongResponse
+				c.pingPongsRWMutex.RLock()
+				pp, ok := c.pingPongs[pingPongRes.PartitionName]
+				if !ok {
+					c.logger.Error("Partition not recognized", zap.String("partitionName", pingPongRes.PartitionName))
+					continue
+				}
+				pp.ResponseInput <- struct{}{}
+				c.pingPongsRWMutex.RUnlock()
+			case *pb.Response_ConsumeResponse:
+				consumeRes := res.ConsumeResponse
+				c.consumersRWMutex.RLock()
+				cons, ok := c.consumers[consumeRes.PartitionName]
+				if !ok {
+					c.logger.Error("Partition not recognized", zap.String("partitionName", consumeRes.PartitionName))
+					continue
+				}
+				c.logger.Info("Client received safe consume offset", zap.String("partitionName", consumeRes.PartitionName), zap.Int("offset", int(consumeRes.EndOfSafeOffsetsExclusively)))
+				cons.EndOfSafeOffsetsExclusivelyIn <- consumeRes.EndOfSafeOffsetsExclusively
+				c.consumersRWMutex.RUnlock()
+			case *pb.Response_CreatePartitionResponse:
+				createPartitionRes := res.CreatePartitionResponse
+				successChan, ok := c.expectedCreatePartitionRes[createPartitionRes.PartitionName]
+				if !ok {
+					c.logger.Error("Received a create partition response but not waiting for one", zap.String("partitionName", createPartitionRes.PartitionName))
+					continue
+				}
+				successChan <- createPartitionRes.Successful
+			default:
+				c.logger.Error("Request type not recognized")
+			}
+		}
+	}
 }
 
 func (c *Client) Close() error {

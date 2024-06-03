@@ -1,135 +1,90 @@
 package client
 
 import (
-	"context"
-	"errors"
-	"io"
+	"bytes"
+	"fmt"
+	"net"
 
 	pb "github.com/lthiede/cartero/proto"
-	"github.com/lthiede/cartero/server"
 	"go.uber.org/zap"
-	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/encoding/protodelim"
 )
 
 type Consumer struct {
-	cancel        context.CancelFunc
-	context       context.Context
-	logger        *zap.Logger
-	stream        pb.Broker_ConsumeClient
-	partitionName string
-	offset        uint64
-	messages      [][]byte
-	Output        chan ConsumeOutput
-	Error         chan error
-}
-
-type ConsumeOutput struct {
-	Message []byte
-	Offset  uint64
+	client                         *Client
+	conn                           net.Conn
+	logger                         *zap.Logger
+	partitionName                  string
+	endOfSafeOffsetsExclusively    uint64
+	EndOfSafeOffsetsExclusivelyIn  chan uint64
+	EndOfSafeOffsetsExclusivelyOut chan uint64
+	Error                          chan error
+	done                           chan struct{}
 }
 
 func (client *Client) NewConsumer(partitionName string, startOffset uint64) (*Consumer, error) {
-	context, cancel := context.WithCancel(context.Background())
-	md := metadata.New(map[string]string{server.PartitionNameMetadataKey: partitionName})
-	stream, err := client.grpcClient.Consume(metadata.NewOutgoingContext(context, md))
+	client.consumersRWMutex.Lock()
+	c, ok := client.consumers[partitionName]
+	if !ok {
+		c = &Consumer{
+			client:                         client,
+			conn:                           client.conn,
+			logger:                         client.logger,
+			partitionName:                  partitionName,
+			EndOfSafeOffsetsExclusivelyIn:  make(chan uint64),
+			EndOfSafeOffsetsExclusivelyOut: make(chan uint64),
+			Error:                          make(chan error),
+			done:                           make(chan struct{}),
+		}
+		go c.handleOutput()
+		client.consumers[partitionName] = c
+	}
+	client.consumersRWMutex.Unlock()
+	req := &pb.Request{
+		Request: &pb.Request_ConsumeRequest{
+			ConsumeRequest: &pb.ConsumeRequest{
+				StartOffset:   startOffset,
+				PartitionName: partitionName,
+			},
+		},
+	}
+	wireMessage := &bytes.Buffer{}
+	_, err := protodelim.MarshalTo(wireMessage, req)
 	if err != nil {
-		client.logger.Error("Failed to issue consume", zap.String("partitionName", partitionName))
-		cancel()
-		return nil, err
+		return nil, fmt.Errorf("failed to marshal register consumer request: %v", err)
 	}
-	client.logger.Info("Issued consume call", zap.String("partitionName", partitionName))
-	err = stream.Send(&pb.ConsumeRequest{
-		StartOffset: uint64(startOffset),
-	})
-	if err == io.EOF {
-		client.logger.Error("Failed to set start offset due to server side error", zap.String("partitionName", partitionName), zap.Int("startOffset", int(startOffset)))
-		cancel()
-		return nil, io.EOF
-	}
+	_, err = c.conn.Write(wireMessage.Bytes())
 	if err != nil {
-		client.logger.Error("Failed to set start offset", zap.String("partitionName", partitionName), zap.Int("startOffset", int(startOffset)))
-		cancel()
-		return nil, err
+		return nil, fmt.Errorf("failed to register consumer: %v", err)
 	}
-	client.logger.Info("Specified consume start offset", zap.String("partitionName", partitionName), zap.Int("startOffset", int(startOffset)))
-	c := &Consumer{
-		cancel:        cancel,
-		context:       context,
-		logger:        client.logger,
-		stream:        stream,
-		partitionName: partitionName,
-		offset:        startOffset,
-		Output:        make(chan ConsumeOutput),
-		Error:         make(chan error),
-	}
-	go c.handleOutput()
+	client.logger.Info("Registered consumer", zap.String("partitionName", partitionName), zap.Int("startOffset", int(startOffset)))
 	return c, nil
 }
 
-func (c *Consumer) SetStartOffset(startOffset uint64) error {
-	err := c.stream.Send(&pb.ConsumeRequest{StartOffset: startOffset})
-	if err == io.EOF {
-		c.logger.Error("Failed to set start offset due to server side error", zap.String("partitionName", c.partitionName), zap.Int("startOffset", int(startOffset)))
-		return io.EOF
-	}
-	if err != nil {
-		c.logger.Error("Failed to set start offset", zap.String("partitionName", c.partitionName), zap.Int("startOffset", int(startOffset)))
-		return err
-	}
-	c.logger.Info("Set new start offset", zap.String("partitionName", c.partitionName), zap.Int("startOffset", int(startOffset)))
-	c.offset = startOffset
-	c.messages = nil
-	return nil
-}
-
 func (c *Consumer) handleOutput() {
-	c.logger.Info("Start handling consumption of messages", zap.String("partitionName", c.partitionName))
-	done := c.context.Done()
+	c.logger.Info("Start handling safe consume offsets", zap.String("partitionName", c.partitionName))
+	newOffset := false
 	for {
-		select {
-		case <-done:
-			c.logger.Info("Context has been canceled. Stop handling consumption of messages", zap.String("partitionName", c.partitionName))
-			return
-		default:
-			if len(c.messages) > 0 {
-				message := c.messages[0]
-				c.messages = c.messages[1:]
-				currentOffset := c.offset
-				c.offset++
-				c.logger.Info("Returning message", zap.String("partitionName", c.partitionName), zap.Int("offset", int(currentOffset)))
-				c.Output <- ConsumeOutput{
-					Message: message,
-					Offset:  currentOffset,
-				}
-				continue
-			}
-			in, err := c.stream.Recv()
-			if err == io.EOF {
-				c.logger.Info("Stream closed", zap.String("partitionName", c.partitionName))
-				c.Error <- io.EOF
-				c.Close()
+		if newOffset {
+			select {
+			case <-c.done:
+				c.logger.Info("Stop handling consumption of batches", zap.String("partitionName", c.partitionName))
 				return
+			case end := <-c.EndOfSafeOffsetsExclusivelyIn:
+				c.logger.Info("Consumer received safe consume offset", zap.String("partitionName", c.partitionName), zap.Int("offset", int(end)))
+				c.endOfSafeOffsetsExclusively = end
+			case c.EndOfSafeOffsetsExclusivelyOut <- c.endOfSafeOffsetsExclusively:
+				newOffset = false
 			}
-			if err != nil {
-				c.logger.Error("Failed to receive message", zap.String("partitionName", c.partitionName), zap.Error(err))
-				c.Error <- err
-				c.Close()
+		} else {
+			select {
+			case <-c.done:
+				c.logger.Info("Stop handling consumption of batches", zap.String("partitionName", c.partitionName))
 				return
-			}
-			if in.IsRedirectResponse {
-				c.logger.DPanic("Can't read from broker cache. Reading directly from log instead", zap.String("partitionName", c.partitionName))
-				c.Error <- errors.New("have to read directly from log")
-				continue
-			}
-			messages := in.ConsumeMessageBatch.Messages.Messages
-			message := messages[0]
-			c.messages = messages[1:]
-			currentOffset := in.ConsumeMessageBatch.StartOffset
-			c.offset = currentOffset + 1
-			c.logger.Info("Returning message after reading new batch", zap.String("partitionName", c.partitionName), zap.Int("offset", int(currentOffset)))
-			c.Output <- ConsumeOutput{
-				Message: message,
-				Offset:  currentOffset,
+			case end := <-c.EndOfSafeOffsetsExclusivelyIn:
+				c.logger.Info("Consumer received safe consume offset", zap.String("partitionName", c.partitionName), zap.Int("offset", int(end)))
+				c.endOfSafeOffsetsExclusively = end
+				newOffset = true
 			}
 		}
 	}
@@ -137,6 +92,10 @@ func (c *Consumer) handleOutput() {
 
 func (c *Consumer) Close() error {
 	c.logger.Info("Finished consume call", zap.String("partitionName", c.partitionName))
-	c.cancel()
+
+	c.client.consumersRWMutex.Lock()
+	delete(c.client.consumers, c.partitionName)
+	c.client.consumersRWMutex.Unlock()
+	close(c.done)
 	return nil
 }

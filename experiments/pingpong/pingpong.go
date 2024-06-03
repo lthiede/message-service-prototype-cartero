@@ -16,10 +16,8 @@ import (
 
 var nFlag = flag.Int("n", 31, "number of concurrent clients")
 var lFlag = flag.String("l", "", "local address")
-var sFlag = flag.Bool("s", false, "use streaming requests")
-var mFlag = flag.Bool("m", false, "use server side synchronization")
-var dFlag = flag.Bool("d", true, "use no delay")
-var cFlag = flag.String("c", "proto", "codec for serializing messages")
+
+const partitionName = "testpartition"
 
 const WarmUpPeriod = 60 * time.Second
 const MeasuringPeriod = 60 * time.Second
@@ -48,19 +46,7 @@ func main() {
 	}()
 	flag.Parse()
 	fmt.Printf("Starting %d clients \n", *nFlag)
-	if *sFlag {
-		fmt.Println("The clients are streaming")
-	} else {
-		fmt.Println("The clients send unary requests")
-	}
-	if *mFlag {
-		fmt.Println("The requests are synchronized")
-	} else {
-		fmt.Println("The requests are unsynchronized")
-	}
-	fmt.Printf("NoDelay %t \n", *dFlag)
 	fmt.Printf("Using local address %s \n", *lFlag)
-	fmt.Printf("Messages are serialized with %s \n", *cFlag)
 	resultsChan := make(chan result)
 	for i := 0; i < *nFlag; i++ {
 		go runClient(i, warmUp, measuring, coolDown, resultsChan)
@@ -103,10 +89,6 @@ func main() {
 	}
 	defer file.Close()
 	format := `number local clients: %d
-	sync: %t
-	stream: %t
-	no_delay: %t
-	codec: %s
 	length: %d,
 	p25 index: %d value: %d mus,
 	p50 index: %d value: %d mus,
@@ -117,7 +99,7 @@ func main() {
 	p99.99 index: %d value: %d mus,
 	p99.999 index: %d value: %d mus,
 	qps: %f`
-	fmt.Fprintf(file, format, *nFlag, *mFlag, *sFlag, *dFlag, *cFlag, int(length),
+	fmt.Fprintf(file, format, *nFlag, int(length),
 		p25Index, p25.Microseconds(),
 		p50Index, p50.Microseconds(),
 		p75Index, p75.Microseconds(),
@@ -135,24 +117,15 @@ func runClient(clientNumber int, warmUp chan int, measuring chan int, coolDown c
 		fmt.Printf("Failed to create logger: %v", err)
 		os.Exit(1)
 	}
-	c, err := client.NewWithOptions("172.18.94.80:8080", *lFlag, *cFlag, *dFlag, logger)
+	c, err := client.NewWithOptions("172.18.94.80:8080", *lFlag, logger)
 	if err != nil {
 		logger.Fatal("Failed to create client", zap.Error(err))
 	}
-	var pingPongClient client.PingPong
-	if *sFlag {
-		if *mFlag {
-			pingPongClient, err = c.NewStreamPingPongSync()
-		} else {
-			pingPongClient, err = c.NewStreamPingPong()
-		}
-	} else {
-		if *mFlag {
-			pingPongClient, err = c.NewUnaryPingPongSync()
-		} else {
-			pingPongClient, err = c.NewUnaryPingPong()
-		}
+	err = c.CreatePartition(partitionName)
+	if err != nil {
+		logger.Fatal("Failed to create partition", zap.Error(err))
 	}
+	pingPongClient, err := c.NewPingPong(partitionName)
 	if err != nil {
 		logger.Fatal("Failed to create ping pong client", zap.Error(err))
 	}
@@ -167,7 +140,7 @@ warmUp:
 		case <-warmUp:
 			break warmUp
 		default:
-			err := pingPongClient.PingPong()
+			err := pingPongClient.SendPingPong()
 			if err != nil {
 				logger.Fatal("Failed to send request", zap.Error(err))
 			}
@@ -186,13 +159,13 @@ measuring:
 				if clientNumber == 0 {
 					logger.Info("Sending timed request")
 				}
-				latency, err := pingPongClient.TimedPingPong()
+				latency, err := pingPongClient.SendTimedPingPong()
 				if err != nil {
 					logger.Fatal("Failed to send timed request", zap.Error(err))
 				}
 				latencySamples = append(latencySamples, latency)
 			} else {
-				err := pingPongClient.PingPong()
+				err := pingPongClient.SendPingPong()
 				if err != nil {
 					logger.Fatal("Failed to send request", zap.Error(err))
 				}
@@ -209,7 +182,7 @@ coolDown:
 		case <-coolDown:
 			break coolDown
 		default:
-			err := pingPongClient.PingPong()
+			err := pingPongClient.SendPingPong()
 			if err != nil {
 				logger.Fatal("Failed to send request", zap.Error(err))
 			}

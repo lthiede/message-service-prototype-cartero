@@ -1,5 +1,0 @@
-mode,average p50,average p90,average p95, average p99,only dm-c01 p50,only dm-c01 p90,only dm-c01 p95,only dm-c01 p99
-unary no sync,1335,3034,5053,12370,274,868,1430,2549
-unary sync,2001,4738,7355,23091,328,1146,1572,2628
-stream no sync,1362,1470,1517,4697,204,293,335,571
-stream sync,2315,3040,3149,5172,219,321,367,598

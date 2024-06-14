@@ -1,5 +1,5 @@
 ## Chosen for development
-- TODO: measure latency without gRPC but with my new synchronization
+- TODO: measure synchronization with atomics
 
 ## Features
 - TODO: add committing offsets

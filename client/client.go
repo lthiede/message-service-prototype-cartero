@@ -83,10 +83,7 @@ func (c *Client) handleResponses() {
 					continue
 				}
 				c.logger.Info("Received ack", zap.Uint64("batchId", produceAck.BatchId), zap.Uint64("numberMessages", produceAck.EndOffset-produceAck.StartOffset))
-				p.AckInput <- ProduceAck{
-					BatchId:        produceAck.BatchId,
-					NumMessagesAck: produceAck.EndOffset - produceAck.StartOffset,
-				}
+				p.UpdateAcknowledged(produceAck.BatchId, produceAck.EndOffset-produceAck.StartOffset)
 				c.producersRWMutex.RUnlock()
 			case *pb.Response_PingPongResponse:
 				pingPongRes := res.PingPongResponse
@@ -96,7 +93,7 @@ func (c *Client) handleResponses() {
 					c.logger.Error("Partition not recognized", zap.String("partitionName", pingPongRes.PartitionName))
 					continue
 				}
-				pp.ResponseInput <- struct{}{}
+				pp.UpdateNumPingPongs()
 				c.pingPongsRWMutex.RUnlock()
 			case *pb.Response_ConsumeResponse:
 				consumeRes := res.ConsumeResponse
@@ -107,7 +104,7 @@ func (c *Client) handleResponses() {
 					continue
 				}
 				c.logger.Info("Client received safe consume offset", zap.String("partitionName", consumeRes.PartitionName), zap.Int("offset", int(consumeRes.EndOfSafeOffsetsExclusively)))
-				cons.EndOfSafeOffsetsExclusivelyIn <- consumeRes.EndOfSafeOffsetsExclusively
+				cons.UpdateEndOfSafeOffsetsExclusively(consumeRes.EndOfSafeOffsetsExclusively)
 				c.consumersRWMutex.RUnlock()
 			case *pb.Response_CreatePartitionResponse:
 				createPartitionRes := res.CreatePartitionResponse

@@ -1,10 +1,14 @@
 package consume
 
 import (
+	"time"
+
 	"github.com/lthiede/cartero/partition"
 	pb "github.com/lthiede/cartero/proto"
 	"go.uber.org/zap"
 )
+
+const checkForNewLatency = 100 * time.Millisecond
 
 type update struct {
 	startOffset    uint64
@@ -19,7 +23,7 @@ type PartitionConsumer struct {
 	minNumMessages      int
 	logger              *zap.Logger
 	update              chan update
-	notify              chan uint64
+	checkForNew         chan struct{}
 	quit                chan struct{}
 }
 
@@ -30,14 +34,11 @@ func NewPartitionConsumer(p *partition.Partition, sendConsumeResponse func(*pb.C
 		startOffset:         startOffset,
 		minNumMessages:      minNumMessages,
 		logger:              logger,
-		notify:              make(chan uint64),
+		update:              make(chan update),
+		checkForNew:         make(chan struct{}),
 		quit:                make(chan struct{}),
 	}
 	logger.Info("Adding partition consumer", zap.String("partitionName", p.Name), zap.Uint64("startOffset", startOffset))
-	p.ConsumeRequests <- partition.ConsumeRequest{
-		Notify: pc.notify,
-		Quit:   pc.quit,
-	}
 	go pc.handleConsume()
 	return pc, nil
 }
@@ -52,13 +53,25 @@ func (pc *PartitionConsumer) UpdateConsumption(startOffset uint64, minNumMessage
 
 func (pc *PartitionConsumer) handleConsume() {
 	for {
+		go pc.waitBeforeCheckForNew()
 		select {
 		case <-pc.quit:
 			pc.logger.Info("Stop handling consume")
 			return
-		case newNextOffset := <-pc.notify:
+		case update := <-pc.update:
+			pc.startOffset = update.startOffset
+			pc.minNumMessages = update.minNumMessages
+		case <-pc.checkForNew:
+			newNextOffset := pc.p.NextProduceOffset()
 			if newNextOffset < pc.startOffset {
-				pc.logger.Info("Ignoring consume notification",
+				pc.logger.Info("Ignoring consume notification smaller than startOffset",
+					zap.String("partitionName", pc.p.Name),
+					zap.Uint64("newNextOffset", newNextOffset),
+					zap.Uint("startOffset", uint(pc.startOffset)))
+				continue
+			}
+			if newNextOffset == pc.nextOffset {
+				pc.logger.Info("No new safe consume offset",
 					zap.String("partitionName", pc.p.Name),
 					zap.Uint64("newNextOffset", newNextOffset),
 					zap.Uint("startOffset", uint(pc.startOffset)))
@@ -72,10 +85,15 @@ func (pc *PartitionConsumer) handleConsume() {
 				PartitionName:               pc.p.Name,
 			})
 			pc.nextOffset = newNextOffset
-		case update := <-pc.update:
-			pc.startOffset = update.startOffset
-			pc.minNumMessages = update.minNumMessages
 		}
+	}
+}
+
+func (pc *PartitionConsumer) waitBeforeCheckForNew() {
+	time.Sleep(checkForNewLatency)
+	select {
+	case <-pc.quit:
+	case pc.checkForNew <- struct{}{}:
 	}
 }
 

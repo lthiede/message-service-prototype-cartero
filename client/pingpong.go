@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"net"
+	"sync/atomic"
 	"time"
 
 	pb "github.com/lthiede/cartero/proto"
@@ -16,7 +17,7 @@ type PingPong struct {
 	conn          net.Conn
 	logger        *zap.Logger
 	partitionName string
-	ResponseInput chan struct{}
+	numPingPongs  atomic.Uint64
 }
 
 func (client *Client) NewPingPong(partitionName string) (*PingPong, error) {
@@ -30,7 +31,6 @@ func (client *Client) NewPingPong(partitionName string) (*PingPong, error) {
 		conn:          client.conn,
 		logger:        client.logger,
 		partitionName: partitionName,
-		ResponseInput: make(chan struct{}),
 	}
 	client.pingPongs[partitionName] = pp
 	client.pingPongsRWMutex.Unlock()
@@ -38,6 +38,7 @@ func (client *Client) NewPingPong(partitionName string) (*PingPong, error) {
 }
 
 func (pp *PingPong) SendPingPong() error {
+	oldNumPingPongs := pp.numPingPongs.Load()
 	req := &pb.Request{
 		Request: &pb.Request_PingPongRequest{
 			PingPongRequest: &pb.PingPongRequest{
@@ -54,12 +55,15 @@ func (pp *PingPong) SendPingPong() error {
 	if err != nil {
 		return fmt.Errorf("failed to send ping pong request: %v", err)
 	}
-	<-pp.ResponseInput
+	for pp.numPingPongs.Load() < oldNumPingPongs+1 {
+
+	}
 	return nil
 }
 
 func (pp *PingPong) SendTimedPingPong() (time.Duration, error) {
 	start := time.Now()
+	oldNumPingPongs := pp.numPingPongs.Load()
 	req := &pb.Request{
 		Request: &pb.Request_PingPongRequest{
 			PingPongRequest: &pb.PingPongRequest{
@@ -76,9 +80,16 @@ func (pp *PingPong) SendTimedPingPong() (time.Duration, error) {
 	if err != nil {
 		return 0, fmt.Errorf("failed to send ping pong request: %v", err)
 	}
-	<-pp.ResponseInput
+	for pp.numPingPongs.Load() < oldNumPingPongs+1 {
+
+	}
 	end := time.Now()
 	return end.Sub(start), nil
+}
+
+func (pp *PingPong) UpdateNumPingPongs() {
+	oldNumPingPongs := pp.numPingPongs.Load()
+	pp.numPingPongs.Store(oldNumPingPongs + 1)
 }
 
 func (pp *PingPong) Close() error {

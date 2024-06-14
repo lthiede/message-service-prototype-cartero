@@ -3,6 +3,7 @@ package client
 import (
 	"bytes"
 	"net"
+	"sync/atomic"
 	"time"
 
 	pb "github.com/lthiede/cartero/proto"
@@ -19,11 +20,9 @@ type Producer struct {
 	logger                *zap.Logger
 	partitionName         string
 	messages              [][]byte
-	batchId               uint64 // implicitly starts at 0
-	batchIdUnacknowledged uint64 // implicitly starts at 0
-	numMessagesAck        uint64 // implicitly starts at 0
-	AckInput              chan ProduceAck
-	AckOutput             chan ProduceAck
+	batchId               uint64        // implicitly starts at 0
+	batchIdUnacknowledged atomic.Uint64 // implicitly starts at 0
+	numMessagesAck        atomic.Uint64 // implicitly starts at 0
 	Input                 chan []byte
 	Error                 chan ProduceError
 	done                  chan struct{}
@@ -52,13 +51,10 @@ func (client *Client) NewProducer(partitionName string) (*Producer, error) {
 		partitionName: partitionName,
 		Input:         make(chan []byte),
 		Error:         make(chan ProduceError),
-		AckInput:      make(chan ProduceAck),
-		AckOutput:     make(chan ProduceAck),
 		done:          make(chan struct{}),
 	}
 	client.producers[partitionName] = p
 	client.producersRWMutex.Unlock()
-	go p.handleAcks()
 	go p.handleInput()
 	return p, nil
 }
@@ -101,39 +97,6 @@ func (p *Producer) handleInput() {
 	}
 }
 
-func (p *Producer) handleAcks() {
-	p.logger.Info("Start handling incoming acknowledges of batches", zap.String("partitionName", p.partitionName))
-	newAcks := false
-	for {
-		if newAcks {
-			ackOut := ProduceAck{
-				BatchId:        p.batchIdUnacknowledged - 1,
-				NumMessagesAck: p.numMessagesAck,
-			}
-			select {
-			case <-p.done:
-				p.logger.Info("Stop handling acknowledge of produced batches", zap.String("partitionName", p.partitionName))
-				return
-			case ack := <-p.AckInput:
-				p.batchIdUnacknowledged = ack.BatchId + 1
-				p.numMessagesAck += ack.NumMessagesAck
-			case p.AckOutput <- ackOut:
-				newAcks = false
-			}
-		} else {
-			select {
-			case <-p.done:
-				p.logger.Info("Stop handling acknowledge of produced batches", zap.String("partitionName", p.partitionName))
-				return
-			case ack := <-p.AckInput:
-				p.batchIdUnacknowledged = ack.BatchId + 1
-				p.numMessagesAck += ack.NumMessagesAck
-				newAcks = true
-			}
-		}
-	}
-}
-
 func (p *Producer) sendBatch() {
 	req := &pb.Request{
 		Request: &pb.Request_ProduceRequest{
@@ -165,6 +128,19 @@ func (p *Producer) sendBatch() {
 		return
 	}
 	p.batchId++
+}
+
+func (p *Producer) UpdateAcknowledged(batchId uint64, numMessages uint64) {
+	p.batchIdUnacknowledged.Store(batchId + 1)
+	p.numMessagesAck.Store(p.numMessagesAck.Load() + numMessages)
+}
+
+func (p *Producer) NumMessagesAck() uint64 {
+	return p.numMessagesAck.Load()
+}
+
+func (p *Producer) BatchIdAck() uint64 {
+	return p.batchIdUnacknowledged.Load() - 1
 }
 
 func (p *Producer) Close() error {

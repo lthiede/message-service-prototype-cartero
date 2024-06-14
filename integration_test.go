@@ -42,6 +42,21 @@ func setupClient() (*client.Client, error) {
 	return client, nil
 }
 
+func waitForAcks(expectedNumAck int, producer *client.Producer, timeout <-chan int) error {
+	for int(producer.NumMessagesAck()) < expectedNumAck {
+		time.Sleep(100 * time.Millisecond)
+		select {
+		case err := <-producer.Error:
+			return err.Err
+		case <-timeout:
+			return errors.New("Waiting for acks timed out")
+		default:
+			continue
+		}
+	}
+	return nil
+}
+
 func produce(numberMessages int, partitionName string, client *client.Client, maxInFlight int, wg *sync.WaitGroup, errChan chan<- error) {
 	producer, err := client.NewProducer(partitionName)
 	if err != nil {
@@ -56,56 +71,45 @@ func produce(numberMessages int, partitionName string, client *client.Client, ma
 		time.Sleep(20 * time.Second)
 		close(timeout)
 	}()
-	numberAck := 0
-	inFlight := 0
-	for numberProduced := 0; numberProduced < numberMessages; numberProduced++ {
+	for numberProduced := 0; numberProduced < numberMessages; {
 		currentMessage := []byte(fmt.Sprintf("%s_%d", partitionName, numberProduced))
 		select {
 		case producer.Input <- currentMessage:
-			inFlight++
+			numberProduced++
 		case <-timeout:
 			errChan <- errors.New("Produce timed out")
 			wg.Done()
 			log.Println("Produce timed out")
 			return
 		}
-		if inFlight == maxInFlight {
-			select {
-			case ack := <-producer.AckOutput:
-				log.Printf("batch %d acknowledged %d messages in total", ack.BatchId, int(ack.NumMessagesAck))
-				numberAck = int(ack.NumMessagesAck)
-			case err := <-producer.Error:
-				errChan <- err.Err
-				wg.Done()
-				log.Println("Received error waiting for acks because max in flight requests reached")
-				return
-			case <-timeout:
-				errChan <- errors.New("Waiting for acks timed out")
-				wg.Done()
-				log.Println("Received timeout waiting for acks because max in flight requests reached")
-				return
-			}
-			inFlight = 0
+		err := waitForAcks(numberProduced-maxInFlight, producer, timeout)
+		if err != nil {
+			errChan <- err
+			wg.Done()
+			return
 		}
 	}
-	for numberAck < numberMessages {
-		select {
-		case ack := <-producer.AckOutput:
-			numberAck = int(ack.NumMessagesAck)
-		case err := <-producer.Error:
-			errChan <- err.Err
-			wg.Done()
-			log.Println("Received error waiting for acks because all batches produced")
-			return
-		case <-timeout:
-			errChan <- errors.New("Waiting for acks timed out")
-			wg.Done()
-			log.Println("Received timeout waiting for acks because all batches produced")
-			return
-		}
+	err = waitForAcks(numberMessages, producer, timeout)
+	if err != nil {
+		errChan <- err
+		wg.Done()
+		return
 	}
 	wg.Done()
 	log.Println("Exiting naturally")
+}
+
+func waitForSafeOffset(expectedEndOfSafeOffsets uint64, consumer *client.Consumer, timeout <-chan int) error {
+	for consumer.EndOfSafeOffsetsExclusively() < expectedEndOfSafeOffsets {
+		time.Sleep(100 * time.Millisecond)
+		select {
+		case <-timeout:
+			return errors.New("Waiting for safe consume offset timed out")
+		default:
+			continue
+		}
+	}
+	return nil
 }
 
 func consume(numberMessages int, startOffset uint64, partitionName string, client *client.Client, wg *sync.WaitGroup, errChan chan<- error) {
@@ -121,19 +125,11 @@ func consume(numberMessages int, startOffset uint64, partitionName string, clien
 		time.Sleep(20 * time.Second)
 		close(timeout)
 	}()
-	for endOfSafeOffsets := startOffset; endOfSafeOffsets < startOffset+uint64(numberMessages); {
-		select {
-		case endOfSafeOffsets = <-consumer.EndOfSafeOffsetsExclusivelyOut:
-			if endOfSafeOffsets < startOffset {
-				errChan <- errors.New("Received offset notification for offset < startOffset")
-				wg.Done()
-				return
-			}
-		case <-timeout:
-			errChan <- errors.New("Consume timed out")
-			wg.Done()
-			return
-		}
+	err = waitForSafeOffset(startOffset+uint64(numberMessages), consumer, timeout)
+	if err != nil {
+		errChan <- err
+		wg.Done()
+		return
 	}
 	wg.Done()
 }

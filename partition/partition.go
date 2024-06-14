@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 
 	pb "github.com/lthiede/cartero/proto"
 	"go.uber.org/zap"
@@ -11,18 +12,14 @@ import (
 )
 
 type Partition struct {
-	Name                          string
-	ProduceRequests               chan ProduceRequest
-	PingPongRequests              chan PingPongRequest
-	PingPongSyncLikeNotifyConsume chan struct{}
-	ConsumeRequests               chan ConsumeRequest
-	consumers                     []ConsumeRequest
-	produceNotifyConsume          chan uint64
-	storage                       *os.File
-	quit                          chan int
-	logger                        *zap.Logger
-	NextProduceOffset             uint64
-	NextConsumeOffset             uint64
+	Name              string
+	ProduceRequests   chan ProduceRequest
+	PingPongRequests  chan PingPongRequest
+	storage           *os.File
+	quit              chan int
+	logger            *zap.Logger
+	pingPongCount     atomic.Uint64 // initialized to default value 0
+	nextProduceOffset atomic.Uint64 // initialized to default value 0
 }
 
 type ProduceRequest struct {
@@ -53,21 +50,15 @@ func New(name string, logger *zap.Logger) (*Partition, error) {
 	}
 	logger.Debug("Created file", zap.String("partitionName", name), zap.String("file", file.Name()))
 	p := &Partition{
-		Name:                          name,
-		ProduceRequests:               make(chan ProduceRequest),
-		PingPongRequests:              make(chan PingPongRequest),
-		PingPongSyncLikeNotifyConsume: make(chan struct{}),
-		ConsumeRequests:               make(chan ConsumeRequest),
-		produceNotifyConsume:          make(chan uint64),
-		storage:                       file,
-		quit:                          make(chan int),
-		logger:                        logger,
-		NextProduceOffset:             0,
+		Name:             name,
+		ProduceRequests:  make(chan ProduceRequest),
+		PingPongRequests: make(chan PingPongRequest),
+		storage:          file,
+		quit:             make(chan int),
+		logger:           logger,
 	}
 	go p.handleProduce()
 	go p.handlePingPong()
-	go p.pingPongSyncLikeNotifyConsume()
-	go p.handleConsume()
 	return p, nil
 }
 
@@ -85,14 +76,14 @@ func (p *Partition) handleProduce() {
 			}
 			numberMessages := len(pr.Messages.Messages)
 			p.logger.Info("Successfully persisted batch", zap.String("partitionName", p.Name), zap.Uint64("batchId", pr.BatchId), zap.Int("numberMessages", numberMessages))
+			oldNextProduceOffset := p.nextProduceOffset.Load()
 			pr.SendAck(&pb.ProduceAck{
 				BatchId:       pr.BatchId,
 				PartitionName: p.Name,
-				StartOffset:   uint64(p.NextProduceOffset),
-				EndOffset:     uint64(p.NextProduceOffset + uint64(numberMessages)),
+				StartOffset:   oldNextProduceOffset,
+				EndOffset:     oldNextProduceOffset + uint64(numberMessages),
 			})
-			p.NextProduceOffset += uint64(numberMessages)
-			p.produceNotifyConsume <- p.NextProduceOffset
+			p.nextProduceOffset.Store(oldNextProduceOffset + uint64(numberMessages))
 		case <-p.quit:
 			p.logger.Info("Stop handling produce", zap.String("partitionName", p.Name))
 			return
@@ -100,62 +91,25 @@ func (p *Partition) handleProduce() {
 	}
 }
 
+func (p *Partition) NextProduceOffset() uint64 {
+	return p.nextProduceOffset.Load()
+}
+
 func (p *Partition) handlePingPong() {
 	p.logger.Info("Start handling ping pong", zap.String("partitionName", p.Name))
 	for {
 		select {
 		case ppr := <-p.PingPongRequests:
+			oldPingPongCount := p.pingPongCount.Load()
 			ppr.SendPingPongResponse(&pb.PingPongResponse{
 				PartitionName: p.Name,
 			})
-			p.produceNotifyConsume <- p.NextProduceOffset
+			p.pingPongCount.Store(oldPingPongCount + 1)
 		case <-p.quit:
 			p.logger.Info("Stop handling ping pong", zap.String("partitionName", p.Name))
 			return
 		}
 	}
-}
-
-func (p *Partition) pingPongSyncLikeNotifyConsume() {
-	p.logger.Info("Start handling ping pong sync like notify consume", zap.String("partitionName", p.Name))
-	for {
-		select {
-		case <-p.quit:
-			p.logger.Info("Stop handling ping pong sync like notify consume", zap.String("partitionName", p.Name))
-			return
-		case <-p.PingPongSyncLikeNotifyConsume:
-		}
-	}
-}
-
-func (p *Partition) handleConsume() {
-	p.logger.Info("Start handling consume", zap.String("partitionName", p.Name))
-	for {
-		select {
-		case <-p.quit:
-			p.logger.Info("Stop handling consume", zap.String("partitionName", p.Name))
-			return
-		case cr := <-p.ConsumeRequests:
-			p.consumers = append(p.consumers, cr)
-			cr.Notify <- p.NextConsumeOffset
-		case newNextOffset := <-p.produceNotifyConsume:
-			p.notifyConsumers(newNextOffset)
-		}
-	}
-}
-
-func (p *Partition) notifyConsumers(newNextOffset uint64) {
-	i := 0 // output index
-	for _, consumer := range p.consumers {
-		select {
-		case <-consumer.Quit:
-		case consumer.Notify <- newNextOffset:
-			p.consumers[i] = consumer
-			i++
-		}
-	}
-	p.NextConsumeOffset = newNextOffset
-	p.consumers = p.consumers[:i]
 }
 
 func (p *Partition) Close() error {

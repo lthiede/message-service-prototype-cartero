@@ -24,10 +24,7 @@ const _ = grpc.SupportPackageIsVersion7
 type BrokerClient interface {
 	Produce(ctx context.Context, opts ...grpc.CallOption) (Broker_ProduceClient, error)
 	Consume(ctx context.Context, opts ...grpc.CallOption) (Broker_ConsumeClient, error)
-	UnaryPingPong(ctx context.Context, in *Ping, opts ...grpc.CallOption) (*Pong, error)
-	UnaryPingPongSync(ctx context.Context, in *Ping, opts ...grpc.CallOption) (*Pong, error)
-	StreamPingPong(ctx context.Context, opts ...grpc.CallOption) (Broker_StreamPingPongClient, error)
-	StreamPingPongSync(ctx context.Context, opts ...grpc.CallOption) (Broker_StreamPingPongSyncClient, error)
+	PingPong(ctx context.Context, opts ...grpc.CallOption) (Broker_PingPongClient, error)
 }
 
 type brokerClient struct {
@@ -100,79 +97,30 @@ func (x *brokerConsumeClient) Recv() (*ConsumeResponse, error) {
 	return m, nil
 }
 
-func (c *brokerClient) UnaryPingPong(ctx context.Context, in *Ping, opts ...grpc.CallOption) (*Pong, error) {
-	out := new(Pong)
-	err := c.cc.Invoke(ctx, "/Broker/UnaryPingPong", in, out, opts...)
+func (c *brokerClient) PingPong(ctx context.Context, opts ...grpc.CallOption) (Broker_PingPongClient, error) {
+	stream, err := c.cc.NewStream(ctx, &Broker_ServiceDesc.Streams[2], "/Broker/PingPong", opts...)
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
-}
-
-func (c *brokerClient) UnaryPingPongSync(ctx context.Context, in *Ping, opts ...grpc.CallOption) (*Pong, error) {
-	out := new(Pong)
-	err := c.cc.Invoke(ctx, "/Broker/UnaryPingPongSync", in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *brokerClient) StreamPingPong(ctx context.Context, opts ...grpc.CallOption) (Broker_StreamPingPongClient, error) {
-	stream, err := c.cc.NewStream(ctx, &Broker_ServiceDesc.Streams[2], "/Broker/StreamPingPong", opts...)
-	if err != nil {
-		return nil, err
-	}
-	x := &brokerStreamPingPongClient{stream}
+	x := &brokerPingPongClient{stream}
 	return x, nil
 }
 
-type Broker_StreamPingPongClient interface {
+type Broker_PingPongClient interface {
 	Send(*Ping) error
 	Recv() (*Pong, error)
 	grpc.ClientStream
 }
 
-type brokerStreamPingPongClient struct {
+type brokerPingPongClient struct {
 	grpc.ClientStream
 }
 
-func (x *brokerStreamPingPongClient) Send(m *Ping) error {
+func (x *brokerPingPongClient) Send(m *Ping) error {
 	return x.ClientStream.SendMsg(m)
 }
 
-func (x *brokerStreamPingPongClient) Recv() (*Pong, error) {
-	m := new(Pong)
-	if err := x.ClientStream.RecvMsg(m); err != nil {
-		return nil, err
-	}
-	return m, nil
-}
-
-func (c *brokerClient) StreamPingPongSync(ctx context.Context, opts ...grpc.CallOption) (Broker_StreamPingPongSyncClient, error) {
-	stream, err := c.cc.NewStream(ctx, &Broker_ServiceDesc.Streams[3], "/Broker/StreamPingPongSync", opts...)
-	if err != nil {
-		return nil, err
-	}
-	x := &brokerStreamPingPongSyncClient{stream}
-	return x, nil
-}
-
-type Broker_StreamPingPongSyncClient interface {
-	Send(*Ping) error
-	Recv() (*Pong, error)
-	grpc.ClientStream
-}
-
-type brokerStreamPingPongSyncClient struct {
-	grpc.ClientStream
-}
-
-func (x *brokerStreamPingPongSyncClient) Send(m *Ping) error {
-	return x.ClientStream.SendMsg(m)
-}
-
-func (x *brokerStreamPingPongSyncClient) Recv() (*Pong, error) {
+func (x *brokerPingPongClient) Recv() (*Pong, error) {
 	m := new(Pong)
 	if err := x.ClientStream.RecvMsg(m); err != nil {
 		return nil, err
@@ -186,10 +134,7 @@ func (x *brokerStreamPingPongSyncClient) Recv() (*Pong, error) {
 type BrokerServer interface {
 	Produce(Broker_ProduceServer) error
 	Consume(Broker_ConsumeServer) error
-	UnaryPingPong(context.Context, *Ping) (*Pong, error)
-	UnaryPingPongSync(context.Context, *Ping) (*Pong, error)
-	StreamPingPong(Broker_StreamPingPongServer) error
-	StreamPingPongSync(Broker_StreamPingPongSyncServer) error
+	PingPong(Broker_PingPongServer) error
 	mustEmbedUnimplementedBrokerServer()
 }
 
@@ -203,17 +148,8 @@ func (UnimplementedBrokerServer) Produce(Broker_ProduceServer) error {
 func (UnimplementedBrokerServer) Consume(Broker_ConsumeServer) error {
 	return status.Errorf(codes.Unimplemented, "method Consume not implemented")
 }
-func (UnimplementedBrokerServer) UnaryPingPong(context.Context, *Ping) (*Pong, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method UnaryPingPong not implemented")
-}
-func (UnimplementedBrokerServer) UnaryPingPongSync(context.Context, *Ping) (*Pong, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method UnaryPingPongSync not implemented")
-}
-func (UnimplementedBrokerServer) StreamPingPong(Broker_StreamPingPongServer) error {
-	return status.Errorf(codes.Unimplemented, "method StreamPingPong not implemented")
-}
-func (UnimplementedBrokerServer) StreamPingPongSync(Broker_StreamPingPongSyncServer) error {
-	return status.Errorf(codes.Unimplemented, "method StreamPingPongSync not implemented")
+func (UnimplementedBrokerServer) PingPong(Broker_PingPongServer) error {
+	return status.Errorf(codes.Unimplemented, "method PingPong not implemented")
 }
 func (UnimplementedBrokerServer) mustEmbedUnimplementedBrokerServer() {}
 
@@ -280,87 +216,25 @@ func (x *brokerConsumeServer) Recv() (*ConsumeRequest, error) {
 	return m, nil
 }
 
-func _Broker_UnaryPingPong_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Ping)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(BrokerServer).UnaryPingPong(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: "/Broker/UnaryPingPong",
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BrokerServer).UnaryPingPong(ctx, req.(*Ping))
-	}
-	return interceptor(ctx, in, info, handler)
+func _Broker_PingPong_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(BrokerServer).PingPong(&brokerPingPongServer{stream})
 }
 
-func _Broker_UnaryPingPongSync_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Ping)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(BrokerServer).UnaryPingPongSync(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: "/Broker/UnaryPingPongSync",
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BrokerServer).UnaryPingPongSync(ctx, req.(*Ping))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Broker_StreamPingPong_Handler(srv interface{}, stream grpc.ServerStream) error {
-	return srv.(BrokerServer).StreamPingPong(&brokerStreamPingPongServer{stream})
-}
-
-type Broker_StreamPingPongServer interface {
+type Broker_PingPongServer interface {
 	Send(*Pong) error
 	Recv() (*Ping, error)
 	grpc.ServerStream
 }
 
-type brokerStreamPingPongServer struct {
+type brokerPingPongServer struct {
 	grpc.ServerStream
 }
 
-func (x *brokerStreamPingPongServer) Send(m *Pong) error {
+func (x *brokerPingPongServer) Send(m *Pong) error {
 	return x.ServerStream.SendMsg(m)
 }
 
-func (x *brokerStreamPingPongServer) Recv() (*Ping, error) {
-	m := new(Ping)
-	if err := x.ServerStream.RecvMsg(m); err != nil {
-		return nil, err
-	}
-	return m, nil
-}
-
-func _Broker_StreamPingPongSync_Handler(srv interface{}, stream grpc.ServerStream) error {
-	return srv.(BrokerServer).StreamPingPongSync(&brokerStreamPingPongSyncServer{stream})
-}
-
-type Broker_StreamPingPongSyncServer interface {
-	Send(*Pong) error
-	Recv() (*Ping, error)
-	grpc.ServerStream
-}
-
-type brokerStreamPingPongSyncServer struct {
-	grpc.ServerStream
-}
-
-func (x *brokerStreamPingPongSyncServer) Send(m *Pong) error {
-	return x.ServerStream.SendMsg(m)
-}
-
-func (x *brokerStreamPingPongSyncServer) Recv() (*Ping, error) {
+func (x *brokerPingPongServer) Recv() (*Ping, error) {
 	m := new(Ping)
 	if err := x.ServerStream.RecvMsg(m); err != nil {
 		return nil, err
@@ -374,16 +248,7 @@ func (x *brokerStreamPingPongSyncServer) Recv() (*Ping, error) {
 var Broker_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "Broker",
 	HandlerType: (*BrokerServer)(nil),
-	Methods: []grpc.MethodDesc{
-		{
-			MethodName: "UnaryPingPong",
-			Handler:    _Broker_UnaryPingPong_Handler,
-		},
-		{
-			MethodName: "UnaryPingPongSync",
-			Handler:    _Broker_UnaryPingPongSync_Handler,
-		},
-	},
+	Methods:     []grpc.MethodDesc{},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "Produce",
@@ -398,14 +263,8 @@ var Broker_ServiceDesc = grpc.ServiceDesc{
 			ClientStreams: true,
 		},
 		{
-			StreamName:    "StreamPingPong",
-			Handler:       _Broker_StreamPingPong_Handler,
-			ServerStreams: true,
-			ClientStreams: true,
-		},
-		{
-			StreamName:    "StreamPingPongSync",
-			Handler:       _Broker_StreamPingPongSync_Handler,
+			StreamName:    "PingPong",
+			Handler:       _Broker_PingPong_Handler,
 			ServerStreams: true,
 			ClientStreams: true,
 		},

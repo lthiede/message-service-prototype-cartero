@@ -14,16 +14,11 @@ import (
 	"go.uber.org/zap"
 )
 
-var nFlag = flag.Int("n", 31, "number of concurrent clients")
 var lFlag = flag.String("l", "", "local address")
-var sFlag = flag.Bool("s", false, "use streaming requests")
-var mFlag = flag.Bool("m", false, "use server side synchronization")
-var dFlag = flag.Bool("d", true, "use no delay")
-var cFlag = flag.String("c", "proto", "codec for serializing messages")
 
-const WarmUpPeriod = 60 * time.Second
+const WarmUpPeriod = 20 * time.Second
 const MeasuringPeriod = 60 * time.Second
-const CoolDownPeriod = 60 * time.Second
+const CoolDownPeriod = 20 * time.Second
 
 type result struct {
 	latencySamples []time.Duration
@@ -31,6 +26,12 @@ type result struct {
 }
 
 func main() {
+	for _, n := range []int{1, 2, 4, 5, 6, 8, 10, 12, 14, 16, 18, 20} {
+		runExperiment(n)
+	}
+}
+
+func runExperiment(n int) {
 	warmUp := make(chan int)
 	go func() {
 		time.Sleep(WarmUpPeriod)
@@ -47,28 +48,16 @@ func main() {
 		close(coolDown)
 	}()
 	flag.Parse()
-	fmt.Printf("Starting %d clients \n", *nFlag)
-	if *sFlag {
-		fmt.Println("The clients are streaming")
-	} else {
-		fmt.Println("The clients send unary requests")
-	}
-	if *mFlag {
-		fmt.Println("The requests are synchronized")
-	} else {
-		fmt.Println("The requests are unsynchronized")
-	}
-	fmt.Printf("NoDelay %t \n", *dFlag)
+	fmt.Printf("Starting %d clients \n", n)
 	fmt.Printf("Using local address %s \n", *lFlag)
-	fmt.Printf("Messages are serialized with %s \n", *cFlag)
 	resultsChan := make(chan result)
-	for i := 0; i < *nFlag; i++ {
+	for i := 0; i < n; i++ {
 		go runClient(i, warmUp, measuring, coolDown, resultsChan)
 	}
 	fmt.Println("Wait for results")
 	latencySamples := make([]time.Duration, 0)
 	requests := 0
-	for i := 0; i < *nFlag; i++ {
+	for i := 0; i < n; i++ {
 		result := <-resultsChan
 		latencySamples = append(latencySamples, result.latencySamples...)
 		requests += result.requests
@@ -96,17 +85,13 @@ func main() {
 	p99_99 := latencySamples[p99_99Index]
 	p99_999 := latencySamples[p99_999Index]
 	qps := float64(requests) / MeasuringPeriod.Seconds()
-	file, err := os.Create("results")
+	file, err := os.Create(fmt.Sprintf("results_ping_pong_sync_atomics_7x%d", n))
 	if err != nil {
 		log.Println(err.Error())
 		return
 	}
 	defer file.Close()
 	format := `number local clients: %d
-	sync: %t
-	stream: %t
-	no_delay: %t
-	codec: %s
 	length: %d,
 	p25 index: %d value: %d mus,
 	p50 index: %d value: %d mus,
@@ -117,7 +102,7 @@ func main() {
 	p99.99 index: %d value: %d mus,
 	p99.999 index: %d value: %d mus,
 	qps: %f`
-	fmt.Fprintf(file, format, *nFlag, *mFlag, *sFlag, *dFlag, *cFlag, int(length),
+	fmt.Fprintf(file, format, n, int(length),
 		p25Index, p25.Microseconds(),
 		p50Index, p50.Microseconds(),
 		p75Index, p75.Microseconds(),
@@ -135,24 +120,11 @@ func runClient(clientNumber int, warmUp chan int, measuring chan int, coolDown c
 		fmt.Printf("Failed to create logger: %v", err)
 		os.Exit(1)
 	}
-	c, err := client.NewWithOptions("172.18.94.80:8080", *lFlag, *cFlag, *dFlag, logger)
+	c, err := client.NewWithOptions("172.18.94.80:8080", *lFlag, "", false, logger)
 	if err != nil {
 		logger.Fatal("Failed to create client", zap.Error(err))
 	}
-	var pingPongClient client.PingPong
-	if *sFlag {
-		if *mFlag {
-			pingPongClient, err = c.NewStreamPingPongSync()
-		} else {
-			pingPongClient, err = c.NewStreamPingPong()
-		}
-	} else {
-		if *mFlag {
-			pingPongClient, err = c.NewUnaryPingPongSync()
-		} else {
-			pingPongClient, err = c.NewUnaryPingPong()
-		}
-	}
+	pingPongClient, err := c.NewPingPong()
 	if err != nil {
 		logger.Fatal("Failed to create ping pong client", zap.Error(err))
 	}

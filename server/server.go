@@ -1,10 +1,10 @@
 package server
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"net"
+	"sync/atomic"
 
 	"github.com/lthiede/cartero/cache"
 	codec "github.com/lthiede/cartero/experiments/codec"
@@ -26,8 +26,9 @@ type Server struct {
 	grpcServer                *grpc.Server
 	partitions                map[string]partition.Partition
 	cache                     *cache.Cache
-	pingPongPartitionChan     chan struct{}
+	pingPongPartitionChan     chan func(*pb.Pong)
 	quitPingPongPartitionChan chan struct{}
+	pingPongCount             atomic.Uint64 // initialized to default value 0
 }
 
 func New(partitionNames []string, address string, logger *zap.Logger) (*Server, error) {
@@ -46,7 +47,7 @@ func New(partitionNames []string, address string, logger *zap.Logger) (*Server, 
 		grpcServer:                grpc.NewServer(),
 		partitions:                partitions,
 		cache:                     cache,
-		pingPongPartitionChan:     make(chan struct{}),
+		pingPongPartitionChan:     make(chan func(*pb.Pong)),
 		quitPingPongPartitionChan: make(chan struct{}),
 	}
 	l, err := net.Listen("tcp", address)
@@ -207,43 +208,32 @@ func (s *Server) handleIncomingConsumeRequests(stream pb.Broker_ConsumeServer, p
 	}
 }
 
-func (s *Server) UnaryPingPong(ctx context.Context, ping *pb.Ping) (*pb.Pong, error) {
-	return &pb.Pong{}, nil
-}
-
-func (s *Server) UnaryPingPongSync(ctx context.Context, ping *pb.Ping) (*pb.Pong, error) {
-	s.pingPongPartitionChan <- struct{}{}
-	return &pb.Pong{}, nil
-}
-
-func (s *Server) StreamPingPong(stream pb.Broker_StreamPingPongServer) error {
+func (s *Server) PingPong(stream pb.Broker_PingPongServer) error {
 	for {
 		_, err := stream.Recv()
 		if err != nil {
 			return err
 		}
-		stream.Send(&pb.Pong{})
-	}
-}
-
-func (s *Server) StreamPingPongSync(stream pb.Broker_StreamPingPongSyncServer) error {
-	for {
-		_, err := stream.Recv()
-		if err != nil {
-			return err
-		}
-		s.pingPongPartitionChan <- struct{}{}
-		stream.Send(&pb.Pong{})
+		s.pingPongPartitionChan <- Pong(stream)
 	}
 }
 
 func (s *Server) handlePingPongChan() {
 	for {
 		select {
-		case <-s.pingPongPartitionChan:
+		case f := <-s.pingPongPartitionChan:
+			oldPingPongCount := s.pingPongCount.Load()
+			f(&pb.Pong{})
+			s.pingPongCount.Store(oldPingPongCount + 1)
 		case <-s.quitPingPongPartitionChan:
 			return
 		}
+	}
+}
+
+func Pong(stream pb.Broker_PingPongServer) func(*pb.Pong) {
+	return func(pong *pb.Pong) {
+		stream.Send(pong)
 	}
 }
 

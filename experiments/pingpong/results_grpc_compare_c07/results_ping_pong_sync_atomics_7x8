@@ -1,0 +1,11 @@
+number local clients: 8
+	length: 25469,
+	p25 index: 6366 value: 145 mus,
+	p50 index: 12734 value: 172 mus,
+	p75 index: 19101 value: 208 mus,
+	p90 index: 22921 value: 249 mus,
+	p99 index: 25213 value: 392 mus,
+	p99.9 index: 25443 value: 1554 mus,
+	p99.99 index: 25465 value: 2415 mus,
+	p99.999 index: 25468 value: 2553 mus,
+	qps: 42495.050000

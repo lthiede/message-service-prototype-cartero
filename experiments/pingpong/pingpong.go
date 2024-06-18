@@ -14,14 +14,13 @@ import (
 	"go.uber.org/zap"
 )
 
-var nFlag = flag.Int("n", 31, "number of concurrent clients")
 var lFlag = flag.String("l", "", "local address")
 
 const partitionName = "testpartition"
 
-const WarmUpPeriod = 60 * time.Second
+const WarmUpPeriod = 20 * time.Second
 const MeasuringPeriod = 60 * time.Second
-const CoolDownPeriod = 60 * time.Second
+const CoolDownPeriod = 20 * time.Second
 
 type result struct {
 	latencySamples []time.Duration
@@ -29,6 +28,12 @@ type result struct {
 }
 
 func main() {
+	for _, n := range []int{4, 6, 8, 12, 14, 16, 18} {
+		runExperiment(n)
+	}
+}
+
+func runExperiment(n int) {
 	warmUp := make(chan int)
 	go func() {
 		time.Sleep(WarmUpPeriod)
@@ -45,16 +50,16 @@ func main() {
 		close(coolDown)
 	}()
 	flag.Parse()
-	fmt.Printf("Starting %d clients \n", *nFlag)
+	fmt.Printf("Starting %d clients \n", n)
 	fmt.Printf("Using local address %s \n", *lFlag)
 	resultsChan := make(chan result)
-	for i := 0; i < *nFlag; i++ {
+	for i := 0; i < n; i++ {
 		go runClient(i, warmUp, measuring, coolDown, resultsChan)
 	}
 	fmt.Println("Wait for results")
 	latencySamples := make([]time.Duration, 0)
 	requests := 0
-	for i := 0; i < *nFlag; i++ {
+	for i := 0; i < n; i++ {
 		result := <-resultsChan
 		latencySamples = append(latencySamples, result.latencySamples...)
 		requests += result.requests
@@ -82,7 +87,7 @@ func main() {
 	p99_99 := latencySamples[p99_99Index]
 	p99_999 := latencySamples[p99_999Index]
 	qps := float64(requests) / MeasuringPeriod.Seconds()
-	file, err := os.Create("results")
+	file, err := os.Create(fmt.Sprintf("results_ping_pong_sync_atomics_7x%d", n))
 	if err != nil {
 		log.Println(err.Error())
 		return
@@ -99,7 +104,7 @@ func main() {
 	p99.99 index: %d value: %d mus,
 	p99.999 index: %d value: %d mus,
 	qps: %f`
-	fmt.Fprintf(file, format, *nFlag, int(length),
+	fmt.Fprintf(file, format, n, int(length),
 		p25Index, p25.Microseconds(),
 		p50Index, p50.Microseconds(),
 		p75Index, p75.Microseconds(),

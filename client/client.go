@@ -5,7 +5,6 @@ import (
 	"log"
 	"net"
 	"sync"
-	"time"
 
 	pb "github.com/lthiede/cartero/proto"
 	"github.com/lthiede/cartero/readertobytereader"
@@ -25,8 +24,6 @@ type Client struct {
 	expectedCreatePartitionRes map[string]chan bool
 	done                       chan struct{}
 }
-
-const timeout time.Duration = 60 * time.Second
 
 func New(address string, logger *zap.Logger) (*Client, error) {
 	return NewWithOptions(address, "" /*localAddr*/, logger)
@@ -66,7 +63,6 @@ func (c *Client) handleResponses() {
 			c.logger.Info("Stop handling responses")
 			return
 		default:
-			c.conn.SetDeadline(time.Now().Add(timeout))
 			response := &pb.Response{}
 			err := protodelim.UnmarshalFrom(&readertobytereader.ReaderByteReader{Conn: c.conn}, response)
 			if err != nil {
@@ -93,7 +89,7 @@ func (c *Client) handleResponses() {
 					c.logger.Error("Partition not recognized", zap.String("partitionName", pingPongRes.PartitionName))
 					continue
 				}
-				pp.UpdateNumPingPongs()
+				pp.Responses <- struct{}{}
 				c.pingPongsRWMutex.RUnlock()
 			case *pb.Response_ConsumeResponse:
 				consumeRes := res.ConsumeResponse

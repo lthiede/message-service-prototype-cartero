@@ -2,9 +2,9 @@ package client
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net"
-	"sync/atomic"
 	"time"
 
 	pb "github.com/lthiede/cartero/proto"
@@ -12,12 +12,14 @@ import (
 	"google.golang.org/protobuf/encoding/protodelim"
 )
 
+const timeout time.Duration = 10 * time.Second
+
 type PingPong struct {
 	client        *Client
 	conn          net.Conn
 	logger        *zap.Logger
 	partitionName string
-	numPingPongs  atomic.Uint64
+	Responses     chan struct{}
 }
 
 func (client *Client) NewPingPong(partitionName string) (*PingPong, error) {
@@ -31,6 +33,7 @@ func (client *Client) NewPingPong(partitionName string) (*PingPong, error) {
 		conn:          client.conn,
 		logger:        client.logger,
 		partitionName: partitionName,
+		Responses:     make(chan struct{}),
 	}
 	client.pingPongs[partitionName] = pp
 	client.pingPongsRWMutex.Unlock()
@@ -38,7 +41,6 @@ func (client *Client) NewPingPong(partitionName string) (*PingPong, error) {
 }
 
 func (pp *PingPong) SendPingPong() error {
-	oldNumPingPongs := pp.numPingPongs.Load()
 	req := &pb.Request{
 		Request: &pb.Request_PingPongRequest{
 			PingPongRequest: &pb.PingPongRequest{
@@ -55,15 +57,21 @@ func (pp *PingPong) SendPingPong() error {
 	if err != nil {
 		return fmt.Errorf("failed to send ping pong request: %v", err)
 	}
-	for pp.numPingPongs.Load() < oldNumPingPongs+1 {
-
+	timedout := make(chan struct{})
+	go func() {
+		time.Sleep(timeout)
+		close(timedout)
+	}()
+	select {
+	case <-timedout:
+		return errors.New("PingPong timed out")
+	case <-pp.Responses:
 	}
 	return nil
 }
 
 func (pp *PingPong) SendTimedPingPong() (time.Duration, error) {
 	start := time.Now()
-	oldNumPingPongs := pp.numPingPongs.Load()
 	req := &pb.Request{
 		Request: &pb.Request_PingPongRequest{
 			PingPongRequest: &pb.PingPongRequest{
@@ -80,16 +88,18 @@ func (pp *PingPong) SendTimedPingPong() (time.Duration, error) {
 	if err != nil {
 		return 0, fmt.Errorf("failed to send ping pong request: %v", err)
 	}
-	for pp.numPingPongs.Load() < oldNumPingPongs+1 {
-
+	timedout := make(chan struct{})
+	go func() {
+		time.Sleep(timeout)
+		close(timedout)
+	}()
+	select {
+	case <-timedout:
+		return 0, errors.New("PingPong timed out")
+	case <-pp.Responses:
 	}
 	end := time.Now()
 	return end.Sub(start), nil
-}
-
-func (pp *PingPong) UpdateNumPingPongs() {
-	oldNumPingPongs := pp.numPingPongs.Load()
-	pp.numPingPongs.Store(oldNumPingPongs + 1)
 }
 
 func (pp *PingPong) Close() error {

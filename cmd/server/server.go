@@ -1,16 +1,30 @@
 package main
 
 import (
+	"flag"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/lthiede/cartero/server"
+	"github.com/pkg/profile"
 	"go.uber.org/zap"
 )
 
+var cpuFlag = flag.Bool("c", false, "do cpu profiling")
+var blockFlag = flag.Bool("b", false, "do block profiling")
+var mutexFlag = flag.Bool("m", false, "do mutex profiling")
+
 func main() {
+	flag.Parse()
+	if *cpuFlag {
+		defer profile.Start(profile.CPUProfile).Stop()
+	} else if *blockFlag {
+		defer profile.Start(profile.BlockProfile).Stop()
+	} else if *mutexFlag {
+		defer profile.Start(profile.MutexProfile).Stop()
+	}
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	config := zap.NewDevelopmentConfig()

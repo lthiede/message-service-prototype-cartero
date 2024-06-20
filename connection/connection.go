@@ -22,6 +22,7 @@ type Connection struct {
 	partitionCache     map[string]*partition.Partition
 	partitionManager   *partitionmanager.PartitionManager
 	partitionConsumers map[string]*consume.PartitionConsumer
+	responses          chan *pb.Response
 	logger             *zap.Logger
 	acks               chan *pb.ProduceAck
 	quit               chan struct{}
@@ -33,11 +34,13 @@ func New(conn net.Conn, partitionManager *partitionmanager.PartitionManager, log
 		partitionCache:     make(map[string]*partition.Partition),
 		partitionManager:   partitionManager,
 		partitionConsumers: make(map[string]*consume.PartitionConsumer),
+		responses:          make(chan *pb.Response),
 		logger:             logger,
 		acks:               make(chan *pb.ProduceAck),
 		quit:               make(chan struct{}),
 	}
 	go c.handleRequests()
+	go c.handleResponses()
 	return c, nil
 }
 
@@ -65,9 +68,9 @@ func (c *Connection) handleRequests() {
 				}
 				c.logger.Info("Produce request", zap.String("partitionName", produceReq.PartitionName), zap.Uint64("batchId", produceReq.BatchId))
 				p.ProduceRequests <- partition.ProduceRequest{
-					BatchId:  produceReq.BatchId,
-					Messages: produceReq.Messages,
-					SendAck:  c.SendAck,
+					BatchId:         produceReq.BatchId,
+					Messages:        produceReq.Messages,
+					ProduceResponse: c.responses,
 				}
 			case *pb.Request_PingPongRequest:
 				pingPongRequest := req.PingPongRequest
@@ -77,7 +80,7 @@ func (c *Connection) handleRequests() {
 					continue
 				}
 				p.PingPongRequests <- partition.PingPongRequest{
-					SendPingPongResponse: c.SendPingPongResponse,
+					PingPongResponse: c.responses,
 				}
 			case *pb.Request_ConsumeRequest:
 				consumeReq := req.ConsumeRequest
@@ -150,57 +153,26 @@ func (c *Connection) SendResponse(res *pb.CreatePartitionResponse) {
 	}
 }
 
-func (c *Connection) SendAck(ack *pb.ProduceAck) {
-	response := &pb.Response{
-		Response: &pb.Response_ProduceAck{
-			ProduceAck: ack,
-		},
+func (c *Connection) handleResponses() {
+	for {
+		select {
+		case <-c.quit:
+			return
+		case response := <-c.responses:
+			wireMessage := &bytes.Buffer{}
+			_, err := protodelim.MarshalTo(wireMessage, response)
+			if err != nil {
+				c.logger.Error("Failed to marshal response",
+					zap.Error(err))
+			}
+			_, err = c.conn.Write(wireMessage.Bytes())
+			if err != nil {
+				c.logger.Error("Failed to send response",
+					zap.Error(err))
+			}
+		}
 	}
-	c.logger.Info("Acknowledging batch",
-		zap.Int("batchId", int(ack.BatchId)),
-		zap.String("partitionName", ack.PartitionName),
-		zap.Int("startOffset", int(ack.StartOffset)),
-		zap.Int("endOffset", int(ack.EndOffset)))
-	wireMessage := &bytes.Buffer{}
-	_, err := protodelim.MarshalTo(wireMessage, response)
-	if err != nil {
-		c.logger.Error("Failed to marshal batch acknowledge",
-			zap.Error(err),
-			zap.Int("batchId", int(ack.BatchId)),
-			zap.String("partitionName", ack.PartitionName))
-		return
-	}
-	_, err = c.conn.Write(wireMessage.Bytes())
-	if err != nil {
-		c.logger.Error("Failed to acknowledge batch",
-			zap.Error(err),
-			zap.Int("batchId", int(ack.BatchId)),
-			zap.String("partitionName", ack.PartitionName))
-		return
-	}
-}
 
-func (c *Connection) SendPingPongResponse(pingPongResponse *pb.PingPongResponse) {
-	response := &pb.Response{
-		Response: &pb.Response_PingPongResponse{
-			PingPongResponse: pingPongResponse,
-		},
-	}
-	wireMessage := &bytes.Buffer{}
-	_, err := protodelim.MarshalTo(wireMessage, response)
-	if err != nil {
-		c.logger.Error("Failed to marshal ping pong response",
-			zap.Error(err),
-			zap.String("partitionName", pingPongResponse.PartitionName))
-		return
-	}
-	_, err = c.conn.Write(wireMessage.Bytes())
-	if err != nil {
-		c.logger.Error("Failed to acknowledge batch",
-			zap.Error(err),
-			zap.String("partitionName", pingPongResponse.PartitionName))
-		return
-	}
 }
 
 func (c *Connection) SendConsumeResponse(res *pb.ConsumeResponse) {

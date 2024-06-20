@@ -23,13 +23,13 @@ type Partition struct {
 }
 
 type ProduceRequest struct {
-	BatchId  uint64
-	Messages *pb.Messages
-	SendAck  func(*pb.ProduceAck)
+	BatchId         uint64
+	Messages        *pb.Messages
+	ProduceResponse chan *pb.Response
 }
 
 type PingPongRequest struct {
-	SendPingPongResponse func(*pb.PingPongResponse)
+	PingPongResponse chan *pb.Response
 }
 
 type ConsumeRequest struct {
@@ -77,12 +77,21 @@ func (p *Partition) handleProduce() {
 			numberMessages := len(pr.Messages.Messages)
 			p.logger.Info("Successfully persisted batch", zap.String("partitionName", p.Name), zap.Uint64("batchId", pr.BatchId), zap.Int("numberMessages", numberMessages))
 			oldNextProduceOffset := p.nextProduceOffset.Load()
-			pr.SendAck(&pb.ProduceAck{
-				BatchId:       pr.BatchId,
-				PartitionName: p.Name,
-				StartOffset:   oldNextProduceOffset,
-				EndOffset:     oldNextProduceOffset + uint64(numberMessages),
-			})
+			p.logger.Info("Acknowledging batch",
+				zap.Uint64("batchId", pr.BatchId),
+				zap.String("partitionName", p.Name),
+				zap.Uint64("startOffset", oldNextProduceOffset),
+				zap.Uint64("endOffset", oldNextProduceOffset+uint64(numberMessages)))
+			pr.ProduceResponse <- &pb.Response{
+				Response: &pb.Response_ProduceAck{
+					ProduceAck: &pb.ProduceAck{
+						BatchId:       pr.BatchId,
+						PartitionName: p.Name,
+						StartOffset:   oldNextProduceOffset,
+						EndOffset:     oldNextProduceOffset + uint64(numberMessages),
+					},
+				},
+			}
 			p.nextProduceOffset.Store(oldNextProduceOffset + uint64(numberMessages))
 		case <-p.quit:
 			p.logger.Info("Stop handling produce", zap.String("partitionName", p.Name))
@@ -101,9 +110,13 @@ func (p *Partition) handlePingPong() {
 		select {
 		case ppr := <-p.PingPongRequests:
 			oldPingPongCount := p.pingPongCount.Load()
-			ppr.SendPingPongResponse(&pb.PingPongResponse{
-				PartitionName: p.Name,
-			})
+			ppr.PingPongResponse <- &pb.Response{
+				Response: &pb.Response_PingPongResponse{
+					PingPongResponse: &pb.PingPongResponse{
+						PartitionName: p.Name,
+					},
+				},
+			}
 			p.pingPongCount.Store(oldPingPongCount + 1)
 		case <-p.quit:
 			p.logger.Info("Stop handling ping pong", zap.String("partitionName", p.Name))

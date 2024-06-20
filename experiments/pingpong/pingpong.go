@@ -16,6 +16,8 @@ import (
 
 var lFlag = flag.String("l", "", "local address")
 
+//var nFlag = flag.Int("n", 0, "number clients")
+
 const partitionName = "testpartition"
 
 const WarmUpPeriod = 20 * time.Second
@@ -25,10 +27,11 @@ const CoolDownPeriod = 20 * time.Second
 type result struct {
 	latencySamples []time.Duration
 	requests       int
+	errors         int
 }
 
 func main() {
-	for _, n := range []int{4, 6, 8, 12, 14, 16, 18} {
+	for _, n := range []int{1, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30} {
 		runExperiment(n)
 	}
 }
@@ -59,10 +62,12 @@ func runExperiment(n int) {
 	fmt.Println("Wait for results")
 	latencySamples := make([]time.Duration, 0)
 	requests := 0
+	errors := 0
 	for i := 0; i < n; i++ {
 		result := <-resultsChan
 		latencySamples = append(latencySamples, result.latencySamples...)
 		requests += result.requests
+		errors += result.errors
 	}
 	fmt.Println("Got all results")
 	start := time.Now()
@@ -87,7 +92,8 @@ func runExperiment(n int) {
 	p99_99 := latencySamples[p99_99Index]
 	p99_999 := latencySamples[p99_999Index]
 	qps := float64(requests) / MeasuringPeriod.Seconds()
-	file, err := os.Create(fmt.Sprintf("results_ping_pong_sync_atomics_7x%d", n))
+	errorRate := float64(errors) / float64(requests)
+	file, err := os.Create(fmt.Sprintf("results_ping_pong_sync_atomics_response_chan_7x%d", n))
 	if err != nil {
 		log.Println(err.Error())
 		return
@@ -103,7 +109,8 @@ func runExperiment(n int) {
 	p99.9 index: %d value: %d mus,
 	p99.99 index: %d value: %d mus,
 	p99.999 index: %d value: %d mus,
-	qps: %f`
+	qps: %f
+	error rate: %f`
 	fmt.Fprintf(file, format, n, int(length),
 		p25Index, p25.Microseconds(),
 		p50Index, p50.Microseconds(),
@@ -113,13 +120,13 @@ func runExperiment(n int) {
 		p99_9Index, p99_9.Microseconds(),
 		p99_99Index, p99_99.Microseconds(),
 		p99_999Index, p99_999.Microseconds(),
-		qps)
+		qps, errorRate)
 }
 
 func runClient(clientNumber int, warmUp chan int, measuring chan int, coolDown chan int, resultsChan chan result) {
 	logger, err := zap.NewDevelopment()
 	if err != nil {
-		fmt.Printf("Failed to create logger: %v", err)
+		fmt.Printf("Failed to create logger: %v \n", err)
 		os.Exit(1)
 	}
 	c, err := client.NewWithOptions("172.18.94.80:8080", *lFlag, logger)
@@ -136,6 +143,7 @@ func runClient(clientNumber int, warmUp chan int, measuring chan int, coolDown c
 	}
 	latencySamples := make([]time.Duration, 0)
 	requests := 0
+	errors := 0
 	if clientNumber == 0 {
 		logger.Info("Start warmup")
 	}
@@ -147,7 +155,7 @@ warmUp:
 		default:
 			err := pingPongClient.SendPingPong()
 			if err != nil {
-				logger.Fatal("Failed to send request", zap.Error(err))
+				logger.Error("Failed to send request", zap.Error(err))
 			}
 		}
 	}
@@ -166,20 +174,22 @@ measuring:
 				}
 				latency, err := pingPongClient.SendTimedPingPong()
 				if err != nil {
-					logger.Fatal("Failed to send timed request", zap.Error(err))
+					logger.Error("Failed to send timed request", zap.Error(err))
+					errors++
 				}
 				latencySamples = append(latencySamples, latency)
 			} else {
 				err := pingPongClient.SendPingPong()
 				if err != nil {
-					logger.Fatal("Failed to send request", zap.Error(err))
+					logger.Error("Failed to send request", zap.Error(err))
+					errors++
 				}
 			}
 			requests++
 		}
 	}
 	if clientNumber == 0 {
-		logger.Info("Start cooldown")
+		logger.Error("Start cooldown")
 	}
 coolDown:
 	for {
@@ -199,6 +209,7 @@ coolDown:
 	resultsChan <- result{
 		latencySamples: latencySamples,
 		requests:       requests,
+		errors:         errors,
 	}
 	if clientNumber == 0 {
 		logger.Info("Finished")

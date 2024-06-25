@@ -1,91 +1,91 @@
 package partitionmanager
 
 import (
+	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/lthiede/cartero/partition"
-	pb "github.com/lthiede/cartero/proto"
+	"github.com/minio/minio-go/v7"
 	"go.uber.org/zap"
 )
 
 type PartitionManager struct {
-	GetPartitionRequests    chan GetPartitionRequest
-	CreatePartitionRequests chan CreatePartitionRequest
-	partitions              map[string]*partition.Partition
-	logger                  *zap.Logger
-	quit                    chan struct{}
+	rwMutex             sync.RWMutex
+	partitions          map[string]*partition.Partition
+	objectStorageClient *minio.Client
+	logger              *zap.Logger
+	quit                chan struct{}
 }
 
-type GetPartitionRequest struct {
-	PartitionName string
-	Partition     chan *partition.Partition
-}
+// func minioClient() (*minio.Client, error) {
+// 	endpoint := "c08:9000"
 
-type CreatePartitionRequest struct {
-	PartitionName string
-	SendResponse  func(*pb.CreatePartitionResponse)
-}
+// 	// Initialize minio client object.
+// 	options := &minio.Options{
+// 		Creds:  credentials.NewStaticV4("minioadmin", "minioadmin", ""),
+// 		Secure: false,
+// 	}
+// 	return minio.New(endpoint, options)
+// }
 
 func New(partitionNames []string, logger *zap.Logger) (*PartitionManager, error) {
+	// minioClient, err := minioClient()
+	// if err != nil {
+	// 	return nil, fmt.Errorf("error trying to create minio client: %v", err)
+	// }
+	logger.Info("Created object storage client")
 	partitions := map[string]*partition.Partition{}
 	for _, partitionName := range partitionNames {
-		p, err := partition.New(partitionName, logger)
+		p, err := partition.New(partitionName, nil, logger)
 		if err != nil {
 			return nil, fmt.Errorf("error creating partition %s: %v", partitionName, err)
 		}
 		partitions[partitionName] = p
 	}
 	pm := &PartitionManager{
-		CreatePartitionRequests: make(chan CreatePartitionRequest),
-		GetPartitionRequests:    make(chan GetPartitionRequest),
-		partitions:              partitions,
-		logger:                  logger,
-		quit:                    make(chan struct{}),
+		partitions:          partitions,
+		objectStorageClient: nil,
+		logger:              logger,
+		quit:                make(chan struct{}),
 	}
-	go pm.handlePartitionUpdates()
 	return pm, nil
 }
 
-func (pm *PartitionManager) handlePartitionUpdates() {
-	for {
-		select {
-		case <-pm.quit:
-			pm.logger.Info("Stop accepting update partition updates")
-			return
-		case createReq := <-pm.CreatePartitionRequests:
-			pm.logger.Info("Received partition create request", zap.String("partitionName", createReq.PartitionName))
-			_, ok := pm.partitions[createReq.PartitionName]
-			if ok {
-				pm.logger.Warn("Tried to create partition that already existed", zap.String("partitionName", createReq.PartitionName))
-				createReq.SendResponse(&pb.CreatePartitionResponse{
-					Successful:    true,
-					PartitionName: createReq.PartitionName,
-				})
-				continue
-			}
-			p, err := partition.New(createReq.PartitionName, pm.logger)
-			if err != nil {
-				pm.logger.Error("Error creating new partition", zap.Error(err))
-				createReq.SendResponse(&pb.CreatePartitionResponse{
-					Successful:    false,
-					PartitionName: createReq.PartitionName,
-				})
-				continue
-			}
-			pm.partitions[createReq.PartitionName] = p
-			createReq.SendResponse(&pb.CreatePartitionResponse{
-				Successful:    true,
-				PartitionName: createReq.PartitionName,
-			})
-		case getReq := <-pm.GetPartitionRequests:
-			pm.logger.Info("Received partition get request", zap.String("partitionName", getReq.PartitionName))
-			p, ok := pm.partitions[getReq.PartitionName]
-			if !ok {
-				close(getReq.Partition)
-			} else {
-				getReq.Partition <- p
-			}
-		}
+func (pm *PartitionManager) exists(partitionName string) bool {
+	pm.rwMutex.RLock()
+	defer pm.rwMutex.RUnlock()
+	_, ok := pm.partitions[partitionName]
+	return ok
+}
+
+func (pm *PartitionManager) CreatePartition(partitionName string) error {
+	pm.logger.Info("Received partition create request", zap.String("partitionName", partitionName))
+	if pm.exists(partitionName) {
+		pm.logger.Warn("Tried to create partition that already existed", zap.String("partitionName", partitionName))
+		return nil
+	}
+	// this is unsynchronized. currently there might be e.g. name collisions
+	// this can be solved in the future by creating buckets with randomness appended to name
+	p, err := partition.New(partitionName, pm.objectStorageClient, pm.logger)
+	if err != nil {
+		return fmt.Errorf("error creating new partition: %v", err)
+	}
+	pm.rwMutex.Lock()
+	defer pm.rwMutex.Unlock()
+	pm.partitions[partitionName] = p
+	return nil
+}
+
+func (pm *PartitionManager) GetPartition(partitionName string) (*partition.Partition, error) {
+	pm.logger.Info("Received partition get request", zap.String("partitionName", partitionName))
+	pm.rwMutex.RLock()
+	defer pm.rwMutex.RUnlock()
+	p, ok := pm.partitions[partitionName]
+	if !ok {
+		return nil, errors.New("partition doesn't currently exist")
+	} else {
+		return p, nil
 	}
 }
 

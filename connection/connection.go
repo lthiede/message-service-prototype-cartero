@@ -2,7 +2,6 @@ package connection
 
 import (
 	"bytes"
-	"fmt"
 	"net"
 	"time"
 
@@ -61,33 +60,58 @@ func (c *Connection) handleRequests() {
 			switch req := request.Request.(type) {
 			case *pb.Request_ProduceRequest:
 				produceReq := req.ProduceRequest
-				p, err := c.partition(produceReq.PartitionName)
-				if err != nil {
-					c.logger.Error("Error getting partition", zap.Error(err))
-					continue
-				}
 				c.logger.Info("Produce request", zap.String("partitionName", produceReq.PartitionName), zap.Uint64("batchId", produceReq.BatchId))
-				p.ProduceRequests <- partition.ProduceRequest{
-					BatchId:         produceReq.BatchId,
-					Messages:        produceReq.Messages,
-					ProduceResponse: c.responses,
+				p, ok := c.partitionCache[produceReq.PartitionName]
+				if !ok {
+					p, err = c.partitionManager.GetPartition(produceReq.PartitionName)
+					if err != nil {
+						c.logger.Error("Error getting partition", zap.Error(err))
+						continue
+					}
+					c.partitionCache[produceReq.PartitionName] = p
 				}
+				p.AliveLock.RLock()
+				if !p.Alive {
+					delete(c.partitionCache, produceReq.PartitionName)
+					c.logger.Error("Produce request to dead partition", zap.String("partitionName", produceReq.PartitionName), zap.Uint64("batchId", produceReq.BatchId))
+				} else {
+					p.ProduceRequests <- partition.ProduceRequest{
+						BatchId:         produceReq.BatchId,
+						Messages:        produceReq.Messages,
+						ProduceResponse: c.responses,
+					}
+				}
+				p.AliveLock.RUnlock()
 			case *pb.Request_PingPongRequest:
 				pingPongRequest := req.PingPongRequest
-				p, err := c.partition(pingPongRequest.PartitionName)
-				if err != nil {
-					c.logger.Error("Error getting partition", zap.Error(err))
-					continue
+				p, ok := c.partitionCache[pingPongRequest.PartitionName]
+				if !ok {
+					p, err = c.partitionManager.GetPartition(pingPongRequest.PartitionName)
+					if err != nil {
+						c.logger.Error("Error getting partition", zap.Error(err))
+						continue
+					}
+					c.partitionCache[pingPongRequest.PartitionName] = p
 				}
-				p.PingPongRequests <- partition.PingPongRequest{
-					PingPongResponse: c.responses,
+				p.AliveLock.RLock()
+				if !p.Alive {
+					delete(c.partitionCache, pingPongRequest.PartitionName)
+					c.logger.Error("Ping pong request to dead partition", zap.String("partitionName", pingPongRequest.PartitionName))
+				} else {
+					p.PingPongRequests <- partition.PingPongRequest{
+						PingPongResponse: c.responses,
+					}
 				}
+				p.AliveLock.RUnlock()
 			case *pb.Request_ConsumeRequest:
 				consumeReq := req.ConsumeRequest
-				p, err := c.partition(consumeReq.PartitionName)
-				if err != nil {
-					c.logger.Error("Error getting partition", zap.Error(err))
-					continue
+				p, ok := c.partitionCache[consumeReq.PartitionName]
+				if !ok {
+					p, err = c.partitionManager.GetPartition(consumeReq.PartitionName)
+					if err != nil {
+						c.logger.Error("Error getting partition", zap.Error(err))
+						continue
+					}
 				}
 				pc, ok := c.partitionConsumers[consumeReq.PartitionName]
 				if !ok {
@@ -103,33 +127,16 @@ func (c *Connection) handleRequests() {
 				}
 			case *pb.Request_CreatePartitionRequest:
 				createPartitionRequest := req.CreatePartitionRequest
-				c.partitionManager.CreatePartitionRequests <- partitionmanager.CreatePartitionRequest{
+				err := c.partitionManager.CreatePartition(createPartitionRequest.PartitionName)
+				c.SendResponse(&pb.CreatePartitionResponse{
 					PartitionName: createPartitionRequest.PartitionName,
-					SendResponse:  c.SendResponse,
-				}
+					Successful:    err == nil,
+				})
 			default:
 				c.logger.Error("Request type not recognized")
 			}
 		}
 	}
-}
-
-func (c *Connection) partition(partitionName string) (*partition.Partition, error) {
-	p, ok := c.partitionCache[partitionName]
-	if !ok {
-		pChan := make(chan *partition.Partition)
-		c.partitionManager.GetPartitionRequests <- partitionmanager.GetPartitionRequest{
-			PartitionName: partitionName,
-			Partition:     pChan,
-		}
-		p, ok = <-pChan
-		if !ok {
-			return nil, fmt.Errorf("partition %s not recognized ", partitionName)
-		}
-		c.logger.Info("Added partition to connection partition cache", zap.String("partitionName", partitionName))
-		c.partitionCache[partitionName] = p
-	}
-	return p, nil
 }
 
 func (c *Connection) SendResponse(res *pb.CreatePartitionResponse) {

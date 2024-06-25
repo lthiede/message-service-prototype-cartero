@@ -16,7 +16,7 @@ import (
 
 var lFlag = flag.String("l", "", "local address")
 
-//var nFlag = flag.Int("n", 0, "number clients")
+var nFlag = flag.Int("n", 0, "number clients")
 
 const partitionName = "testpartition"
 
@@ -31,8 +31,13 @@ type result struct {
 }
 
 func main() {
-	for _, n := range []int{1, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30} {
-		runExperiment(n)
+	flag.Parse()
+	if *nFlag != 0 {
+		runExperiment(*nFlag)
+	} else {
+		for _, i := range []int{30, 32, 34, 36, 38, 40, 42} {
+			runExperiment(i)
+		}
 	}
 }
 
@@ -93,7 +98,7 @@ func runExperiment(n int) {
 	p99_999 := latencySamples[p99_999Index]
 	qps := float64(requests) / MeasuringPeriod.Seconds()
 	errorRate := float64(errors) / float64(requests)
-	file, err := os.Create(fmt.Sprintf("results_ping_pong_sync_atomics_response_chan_7x%d", n))
+	file, err := os.Create(fmt.Sprintf("results_ping_pong_16_cores_7x%d", n))
 	if err != nil {
 		log.Println(err.Error())
 		return
@@ -189,7 +194,7 @@ measuring:
 		}
 	}
 	if clientNumber == 0 {
-		logger.Error("Start cooldown")
+		logger.Info("Start cooldown")
 	}
 coolDown:
 	for {

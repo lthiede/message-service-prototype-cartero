@@ -1,0 +1,49 @@
+2024-06-22T18:43:28.656+0200	INFO	server/server.go:22	Creating new server
+2024-06-22T18:43:28.657+0200	INFO	partitionmanager/partitionmanager.go:49	Created object storage client
+2024-06-22T18:43:28.657+0200	INFO	partition/partition.go:38	Creating new partition	{"partitionName": "partition0"}
+2024-06-22T18:43:28.657+0200	INFO	partition/partition.go:52	Creating partition	{"capacity": 1}
+2024-06-22T18:43:28.657+0200	INFO	partition/partition.go:38	Creating new partition	{"partitionName": "partition1"}
+2024-06-22T18:43:28.657+0200	INFO	partition/partition.go:52	Creating partition	{"capacity": 1}
+2024-06-22T18:43:28.657+0200	INFO	partition/partition.go:38	Creating new partition	{"partitionName": "partition2"}
+2024-06-22T18:43:28.657+0200	INFO	partition/partition.go:52	Creating partition	{"capacity": 1}
+2024-06-22T18:43:28.657+0200	INFO	partition/partition.go:67	Start handling produce	{"partitionName": "partition0"}
+2024-06-22T18:43:28.657+0200	INFO	partition/partition.go:109	Start handling ping pong	{"partitionName": "partition0"}
+2024-06-22T18:43:28.657+0200	INFO	partition/partition.go:67	Start handling produce	{"partitionName": "partition2"}
+2024-06-22T18:43:28.657+0200	INFO	partition/partition.go:109	Start handling ping pong	{"partitionName": "partition2"}
+2024-06-22T18:43:28.657+0200	INFO	partition/partition.go:67	Start handling produce	{"partitionName": "partition1"}
+2024-06-22T18:43:28.657+0200	INFO	partition/partition.go:109	Start handling ping pong	{"partitionName": "partition1"}
+2024-06-22T18:43:28.657+0200	INFO	server/server.go:37	Accepting connections	{"address": "localhost:8080"}
+2024-06-22T18:43:47.163+0200	DEBUG	server/server.go:65	Closing server
+2024-06-22T18:43:47.163+0200	ERROR	server/server.go:51	Failed to accept new connection	{"error": "accept tcp 127.0.0.1:8080: use of closed network connection"}
+github.com/lthiede/cartero/server.(*Server).acceptConnections
+	/home/lorenz/Desktop/Master_Thesis/cartero/server/server.go:51
+2024-06-22T18:43:47.163+0200	INFO	server/server.go:46	Stop accepting connections
+2024-06-22T18:43:47.163+0200	INFO	partitionmanager/partitionmanager.go:114	Closing partition manager
+2024-06-22T18:43:47.164+0200	DEBUG	partition/partition.go:130	Closing partition	{"partitionName": "partition1"}
+2024-06-22T18:43:47.164+0200	DEBUG	partition/partition.go:130	Closing partition	{"partitionName": "partition2"}
+2024-06-22T18:43:47.164+0200	DEBUG	partition/partition.go:130	Closing partition	{"partitionName": "partition0"}
+2024-06-22T18:43:50.513+0200	INFO	server/server.go:22	Creating new server
+2024-06-22T18:43:50.513+0200	INFO	partitionmanager/partitionmanager.go:49	Created object storage client
+2024-06-22T18:43:50.513+0200	INFO	partition/partition.go:38	Creating new partition	{"partitionName": "partition0"}
+2024-06-22T18:43:50.513+0200	INFO	partition/partition.go:52	Creating partition	{"capacity": 10}
+2024-06-22T18:43:50.513+0200	INFO	partition/partition.go:38	Creating new partition	{"partitionName": "partition1"}
+2024-06-22T18:43:50.513+0200	INFO	partition/partition.go:52	Creating partition	{"capacity": 10}
+2024-06-22T18:43:50.513+0200	INFO	partition/partition.go:38	Creating new partition	{"partitionName": "partition2"}
+2024-06-22T18:43:50.513+0200	INFO	partition/partition.go:52	Creating partition	{"capacity": 10}
+2024-06-22T18:43:50.513+0200	INFO	partition/partition.go:67	Start handling produce	{"partitionName": "partition0"}
+2024-06-22T18:43:50.513+0200	INFO	partition/partition.go:109	Start handling ping pong	{"partitionName": "partition2"}
+2024-06-22T18:43:50.513+0200	INFO	partition/partition.go:67	Start handling produce	{"partitionName": "partition2"}
+2024-06-22T18:43:50.513+0200	INFO	partition/partition.go:109	Start handling ping pong	{"partitionName": "partition0"}
+2024-06-22T18:43:50.513+0200	INFO	partition/partition.go:67	Start handling produce	{"partitionName": "partition1"}
+2024-06-22T18:43:50.513+0200	INFO	partition/partition.go:109	Start handling ping pong	{"partitionName": "partition1"}
+2024-06-22T18:43:50.513+0200	INFO	server/server.go:37	Accepting connections	{"address": "localhost:8080"}
+2024-06-22T18:43:59.500+0200	DEBUG	server/server.go:65	Closing server
+2024-06-22T18:43:59.500+0200	ERROR	server/server.go:51	Failed to accept new connection	{"error": "accept tcp 127.0.0.1:8080: use of closed network connection"}
+github.com/lthiede/cartero/server.(*Server).acceptConnections
+	/home/lorenz/Desktop/Master_Thesis/cartero/server/server.go:51
+2024-06-22T18:43:59.500+0200	INFO	server/server.go:46	Stop accepting connections
+2024-06-22T18:43:59.500+0200	INFO	partitionmanager/partitionmanager.go:114	Closing partition manager
+2024-06-22T18:43:59.501+0200	DEBUG	partition/partition.go:130	Closing partition	{"partitionName": "partition0"}
+2024-06-22T18:43:59.501+0200	DEBUG	partition/partition.go:130	Closing partition	{"partitionName": "partition1"}
+2024-06-22T18:43:59.501+0200	INFO	partitionmanager/partitionmanager.go:74	Stop accepting update partition updates
+2024-06-22T18:43:59.501+0200	DEBUG	partition/partition.go:130	Closing partition	{"partitionName": "partition2"}

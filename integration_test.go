@@ -99,12 +99,23 @@ func produce(numberMessages int, partitionName string, client *client.Client, ma
 	log.Println("Exiting naturally")
 }
 
-func waitForSafeOffset(expectedEndOfSafeOffsets uint64, consumer *client.Consumer, timeout <-chan int) error {
-	for consumer.EndOfSafeOffsetsExclusively() < expectedEndOfSafeOffsets {
-		time.Sleep(100 * time.Millisecond)
+func waitForSafeOffset(startOffset uint64, expectedEndOfSafeOffsets uint64, inOrder bool, partitionName string, consumer *client.Consumer, timeout <-chan int) error {
+	for currentOffset := startOffset; currentOffset < expectedEndOfSafeOffsets; currentOffset++ {
+		message, err := consumer.Consume()
+		if err != nil {
+			return fmt.Errorf("error consuming: %v", err)
+		}
+		if inOrder {
+			expectedMessage := fmt.Sprintf("%s_%d", partitionName, currentOffset)
+			if string(message) != expectedMessage {
+				return fmt.Errorf("Client received message out of order expected %s but got %s", expectedMessage, string(message))
+			} else {
+				fmt.Printf("Client received message %s \n", string(message))
+			}
+		}
 		select {
 		case <-timeout:
-			return errors.New("Waiting for safe consume offset timed out")
+			return errors.New("waiting for safe consume offset timed out")
 		default:
 			continue
 		}
@@ -112,7 +123,7 @@ func waitForSafeOffset(expectedEndOfSafeOffsets uint64, consumer *client.Consume
 	return nil
 }
 
-func consume(numberMessages int, startOffset uint64, partitionName string, client *client.Client, wg *sync.WaitGroup, errChan chan<- error) {
+func consume(numberMessages int, startOffset uint64, inOrder bool, partitionName string, client *client.Client, wg *sync.WaitGroup, errChan chan<- error) {
 	consumer, err := client.NewConsumer(partitionName, uint64(startOffset))
 	if err != nil {
 		errChan <- err
@@ -125,7 +136,7 @@ func consume(numberMessages int, startOffset uint64, partitionName string, clien
 		time.Sleep(20 * time.Second)
 		close(timeout)
 	}()
-	err = waitForSafeOffset(startOffset+uint64(numberMessages), consumer, timeout)
+	err = waitForSafeOffset(startOffset, startOffset+uint64(numberMessages), inOrder, partitionName, consumer, timeout)
 	if err != nil {
 		errChan <- err
 		wg.Done()
@@ -156,8 +167,8 @@ func TestBasicHappyCase(t *testing.T) {
 	errChan := make(chan error, 4)
 	go produce(100, "partition0", producerClient, 20, &wg, errChan)
 	go produce(100, "partition1", producerClient, 20, &wg, errChan)
-	go consume(100, 0, "partition0", consumerClient, &wg, errChan)
-	go consume(100, 0, "partition1", consumerClient, &wg, errChan)
+	go consume(100, 0, true, "partition0", consumerClient, &wg, errChan)
+	go consume(100, 0, true, "partition1", consumerClient, &wg, errChan)
 	wg.Wait()
 	for {
 		select {
@@ -191,8 +202,8 @@ func TestPubSub(t *testing.T) {
 	errChan := make(chan error, 4)
 	go produce(100, "partition0", client0, 50, &wg, errChan)
 	go produce(100, "partition0", client1, 50, &wg, errChan)
-	go consume(200, 0, "partition0", client0, &wg, errChan)
-	go consume(200, 0, "partition0", client1, &wg, errChan)
+	go consume(200, 0, false, "partition0", client0, &wg, errChan)
+	go consume(200, 0, false, "partition0", client1, &wg, errChan)
 	wg.Wait()
 	for {
 		select {
@@ -226,7 +237,7 @@ func TestMaxPublishDelay(t *testing.T) {
 	errChan := make(chan error, 2)
 	go produce(30, "partition0", client1, 5, &wg, errChan)
 	time.Sleep(10 * time.Second)
-	go consume(30, 0, "partition0", client0, &wg, errChan)
+	go consume(30, 0, true, "partition0", client0, &wg, errChan)
 	wg.Wait()
 	for {
 		select {
@@ -259,7 +270,7 @@ func TestReadingFromStartOffset(t *testing.T) {
 	wg.Add(2)
 	errChan := make(chan error, 2)
 	go produce(30, "partition0", client1, 7, &wg, errChan)
-	go consume(15, 15, "partition0", client0, &wg, errChan)
+	go consume(15, 15, true, "partition0", client0, &wg, errChan)
 	wg.Wait()
 	for {
 		select {
@@ -296,7 +307,7 @@ func TestAddingPartitions(t *testing.T) {
 	wg.Add(2)
 	errChan := make(chan error, 2)
 	go produce(100, "testpartition", client0, 20, &wg, errChan)
-	go consume(100, 0, "testpartition", client1, &wg, errChan)
+	go consume(100, 0, true, "testpartition", client1, &wg, errChan)
 	wg.Wait()
 	for {
 		select {

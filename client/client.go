@@ -8,6 +8,8 @@ import (
 
 	pb "github.com/lthiede/cartero/proto"
 	"github.com/lthiede/cartero/readertobytereader"
+	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/encoding/protodelim"
 )
@@ -22,7 +24,19 @@ type Client struct {
 	consumers                  map[string]*Consumer
 	consumersRWMutex           sync.RWMutex
 	expectedCreatePartitionRes map[string]chan bool
+	objectStorageClient        *minio.Client
 	done                       chan struct{}
+}
+
+func minioClient() (*minio.Client, error) {
+	endpoint := "127.0.0.1:9000"
+
+	// Initialize minio client object.
+	options := &minio.Options{
+		Creds:  credentials.NewStaticV4("minioadmin", "minioadmin", ""),
+		Secure: false,
+	}
+	return minio.New(endpoint, options)
 }
 
 func New(address string, logger *zap.Logger) (*Client, error) {
@@ -64,7 +78,7 @@ func (c *Client) handleResponses() {
 			return
 		default:
 			response := &pb.Response{}
-			err := protodelim.UnmarshalFrom(&readertobytereader.ReaderByteReader{Conn: c.conn}, response)
+			err := protodelim.UnmarshalFrom(&readertobytereader.ReaderByteReader{Reader: c.conn}, response)
 			if err != nil {
 				c.logger.Error("Failed to unmarshal response", zap.Error(err))
 				return
@@ -101,6 +115,20 @@ func (c *Client) handleResponses() {
 				}
 				c.logger.Info("Client received safe consume offset", zap.String("partitionName", consumeRes.PartitionName), zap.Int("offset", int(consumeRes.EndOfSafeOffsetsExclusively)))
 				cons.UpdateEndOfSafeOffsetsExclusively(consumeRes.EndOfSafeOffsetsExclusively)
+				c.consumersRWMutex.RUnlock()
+			case *pb.Response_LogConsumeResponse:
+				logConsumeRes := res.LogConsumeResponse
+				if !logConsumeRes.RedirectS3 {
+					c.logger.Error("Received log consume response that doesn't redirect to s3. This isn't supported yet", zap.String("partitionName", logConsumeRes.PartitionName))
+				}
+				c.consumersRWMutex.RLock()
+				cons, ok := c.consumers[logConsumeRes.PartitionName]
+				if !ok {
+					c.logger.Error("Partition not recognized", zap.String("partitionName", logConsumeRes.PartitionName))
+					continue
+				}
+				c.logger.Info("Client received s3 objects to read", zap.String("partitionName", logConsumeRes.PartitionName), zap.Strings("s3Objects", logConsumeRes.ObjectNames))
+				cons.NewS3ObjectNames <- logConsumeRes.ObjectNames
 				c.consumersRWMutex.RUnlock()
 			case *pb.Response_CreatePartitionResponse:
 				createPartitionRes := res.CreatePartitionResponse

@@ -52,7 +52,7 @@ func (c *Connection) handleRequests() {
 		default:
 			c.conn.SetDeadline(time.Now().Add(timeout))
 			request := &pb.Request{}
-			err := protodelim.UnmarshalFrom(&readertobytereader.ReaderByteReader{Conn: c.conn}, request)
+			err := protodelim.UnmarshalFrom(&readertobytereader.ReaderByteReader{Reader: c.conn}, request)
 			if err != nil {
 				c.logger.Error("Failed to unmarshal message", zap.Error(err))
 				return
@@ -83,20 +83,20 @@ func (c *Connection) handleRequests() {
 				}
 				p.AliveLock.RUnlock()
 			case *pb.Request_PingPongRequest:
-				pingPongRequest := req.PingPongRequest
-				p, ok := c.partitionCache[pingPongRequest.PartitionName]
+				pingPongReq := req.PingPongRequest
+				p, ok := c.partitionCache[pingPongReq.PartitionName]
 				if !ok {
-					p, err = c.partitionManager.GetPartition(pingPongRequest.PartitionName)
+					p, err = c.partitionManager.GetPartition(pingPongReq.PartitionName)
 					if err != nil {
 						c.logger.Error("Error getting partition", zap.Error(err))
 						continue
 					}
-					c.partitionCache[pingPongRequest.PartitionName] = p
+					c.partitionCache[pingPongReq.PartitionName] = p
 				}
 				p.AliveLock.RLock()
 				if !p.Alive {
-					delete(c.partitionCache, pingPongRequest.PartitionName)
-					c.logger.Error("Ping pong request to dead partition", zap.String("partitionName", pingPongRequest.PartitionName))
+					delete(c.partitionCache, pingPongReq.PartitionName)
+					c.logger.Error("Ping pong request to dead partition", zap.String("partitionName", pingPongReq.PartitionName))
 				} else {
 					p.PingPongRequests <- partition.PingPongRequest{
 						PingPongResponse: c.responses,
@@ -115,7 +115,7 @@ func (c *Connection) handleRequests() {
 				}
 				pc, ok := c.partitionConsumers[consumeReq.PartitionName]
 				if !ok {
-					newPc, err := consume.NewPartitionConsumer(p, c.SendConsumeResponse, consumeReq.StartOffset, int(consumeReq.MinNumMessages), c.logger)
+					newPc, err := consume.NewPartitionConsumer(p, c.SendResponse, consumeReq.StartOffset, int(consumeReq.MinNumMessages), c.logger)
 					if err != nil {
 						c.logger.Error("Failed to register consumer", zap.String("partitionName", consumeReq.PartitionName))
 						continue
@@ -125,13 +125,39 @@ func (c *Connection) handleRequests() {
 				} else {
 					pc.UpdateConsumption(consumeReq.StartOffset, int(consumeReq.MinNumMessages))
 				}
+			case *pb.Request_LogConsumeRequest:
+				logConsumeReq := req.LogConsumeRequest
+				p, ok := c.partitionCache[logConsumeReq.PartitionName]
+				if !ok {
+					p, err = c.partitionManager.GetPartition(logConsumeReq.PartitionName)
+					if err != nil {
+						c.logger.Error("Error getting partition", zap.Error(err))
+						continue
+					}
+				}
+				objectNames := p.S3ObjectNames(logConsumeReq.StartOffset, logConsumeReq.EndOffsetExclusively)
+				response := &pb.Response{
+					Response: &pb.Response_LogConsumeResponse{
+						LogConsumeResponse: &pb.LogConsumeResponse{
+							RedirectS3:    true,
+							PartitionName: logConsumeReq.PartitionName,
+							ObjectNames:   objectNames,
+						},
+					},
+				}
+				c.SendResponse(response)
 			case *pb.Request_CreatePartitionRequest:
 				createPartitionRequest := req.CreatePartitionRequest
 				err := c.partitionManager.CreatePartition(createPartitionRequest.PartitionName)
-				c.SendResponse(&pb.CreatePartitionResponse{
-					PartitionName: createPartitionRequest.PartitionName,
-					Successful:    err == nil,
-				})
+				response := &pb.Response{
+					Response: &pb.Response_CreatePartitionResponse{
+						CreatePartitionResponse: &pb.CreatePartitionResponse{
+							PartitionName: createPartitionRequest.PartitionName,
+							Successful:    err == nil,
+						},
+					},
+				}
+				c.SendResponse(response)
 			default:
 				c.logger.Error("Request type not recognized")
 			}
@@ -139,22 +165,17 @@ func (c *Connection) handleRequests() {
 	}
 }
 
-func (c *Connection) SendResponse(res *pb.CreatePartitionResponse) {
-	response := &pb.Response{
-		Response: &pb.Response_CreatePartitionResponse{
-			CreatePartitionResponse: res,
-		},
-	}
+func (c *Connection) SendResponse(res *pb.Response) {
 	wireMessage := &bytes.Buffer{}
-	_, err := protodelim.MarshalTo(wireMessage, response)
+	_, err := protodelim.MarshalTo(wireMessage, res)
 	if err != nil {
-		c.logger.Error("Failed to marshal create partition response",
+		c.logger.Error("Failed to marshal response",
 			zap.Error(err))
 		return
 	}
 	_, err = c.conn.Write(wireMessage.Bytes())
 	if err != nil {
-		c.logger.Error("Failed to send create partition response",
+		c.logger.Error("Failed to send response",
 			zap.Error(err))
 		return
 	}
@@ -166,45 +187,10 @@ func (c *Connection) handleResponses() {
 		case <-c.quit:
 			return
 		case response := <-c.responses:
-			wireMessage := &bytes.Buffer{}
-			_, err := protodelim.MarshalTo(wireMessage, response)
-			if err != nil {
-				c.logger.Error("Failed to marshal response",
-					zap.Error(err))
-			}
-			_, err = c.conn.Write(wireMessage.Bytes())
-			if err != nil {
-				c.logger.Error("Failed to send response",
-					zap.Error(err))
-			}
+			c.SendResponse(response)
 		}
 	}
 
-}
-
-func (c *Connection) SendConsumeResponse(res *pb.ConsumeResponse) {
-	response := &pb.Response{
-		Response: &pb.Response_ConsumeResponse{
-			ConsumeResponse: res,
-		},
-	}
-	wireMessage := &bytes.Buffer{}
-	_, err := protodelim.MarshalTo(wireMessage, response)
-	if err != nil {
-		c.logger.Error("Failed to marshal safe offset response",
-			zap.Error(err),
-			zap.Int("safeEndOffset", int(res.EndOfSafeOffsetsExclusively)),
-			zap.String("partitionName", res.PartitionName))
-		return
-	}
-	_, err = c.conn.Write(wireMessage.Bytes())
-	if err != nil {
-		c.logger.Error("Failed to send safe offset to client",
-			zap.Error(err),
-			zap.Int("safeEndOffset", int(res.EndOfSafeOffsetsExclusively)),
-			zap.String("partitionName", res.PartitionName))
-		return
-	}
 }
 
 func (c *Connection) Close() error {

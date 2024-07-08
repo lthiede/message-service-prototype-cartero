@@ -16,27 +16,27 @@ type update struct {
 }
 
 type PartitionConsumer struct {
-	p                   *partition.Partition
-	sendConsumeResponse func(*pb.ConsumeResponse)
-	startOffset         uint64
-	nextOffset          uint64
-	minNumMessages      int
-	logger              *zap.Logger
-	update              chan update
-	checkForNew         chan struct{}
-	quit                chan struct{}
+	p              *partition.Partition
+	sendResponse   func(*pb.Response)
+	startOffset    uint64
+	nextOffset     uint64
+	minNumMessages int
+	logger         *zap.Logger
+	update         chan update
+	checkForNew    chan struct{}
+	quit           chan struct{}
 }
 
-func NewPartitionConsumer(p *partition.Partition, sendConsumeResponse func(*pb.ConsumeResponse), startOffset uint64, minNumMessages int, logger *zap.Logger) (*PartitionConsumer, error) {
+func NewPartitionConsumer(p *partition.Partition, sendResponse func(*pb.Response), startOffset uint64, minNumMessages int, logger *zap.Logger) (*PartitionConsumer, error) {
 	pc := &PartitionConsumer{
-		p:                   p,
-		sendConsumeResponse: sendConsumeResponse,
-		startOffset:         startOffset,
-		minNumMessages:      minNumMessages,
-		logger:              logger,
-		update:              make(chan update),
-		checkForNew:         make(chan struct{}),
-		quit:                make(chan struct{}),
+		p:              p,
+		sendResponse:   sendResponse,
+		startOffset:    startOffset,
+		minNumMessages: minNumMessages,
+		logger:         logger,
+		update:         make(chan update),
+		checkForNew:    make(chan struct{}),
+		quit:           make(chan struct{}),
 	}
 	logger.Info("Adding partition consumer", zap.String("partitionName", p.Name), zap.Uint64("startOffset", startOffset))
 	go pc.handleConsume()
@@ -71,19 +71,21 @@ func (pc *PartitionConsumer) handleConsume() {
 				continue
 			}
 			if newNextOffset == pc.nextOffset {
-				pc.logger.Info("No new safe consume offset",
-					zap.String("partitionName", pc.p.Name),
-					zap.Uint64("newNextOffset", newNextOffset),
-					zap.Uint("startOffset", uint(pc.startOffset)))
+				// pc.logger.Info("No new safe consume offset",
+				// 	zap.String("partitionName", pc.p.Name),
+				// 	zap.Uint64("newNextOffset", newNextOffset),
+				// 	zap.Uint("startOffset", uint(pc.startOffset)))
 				continue
 			}
 			pc.logger.Info("Sending safe consume offset",
 				zap.String("partitionName", pc.p.Name),
 				zap.Uint64("newNextOffset", newNextOffset))
-			pc.sendConsumeResponse(&pb.ConsumeResponse{
-				EndOfSafeOffsetsExclusively: newNextOffset,
-				PartitionName:               pc.p.Name,
-			})
+			pc.sendResponse(&pb.Response{
+				Response: &pb.Response_ConsumeResponse{
+					ConsumeResponse: &pb.ConsumeResponse{
+						EndOfSafeOffsetsExclusively: newNextOffset,
+						PartitionName:               pc.p.Name,
+					}}})
 			pc.nextOffset = newNextOffset
 		}
 	}

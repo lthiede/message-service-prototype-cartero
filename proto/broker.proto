@@ -8,8 +8,9 @@ message Request {
     oneof request {
         ProduceRequest produce_request = 1;
         ConsumeRequest consume_request = 2;
-        CreatePartitionRequest create_partition_request = 3;
-        PingPongRequest ping_pong_request = 4;
+        LogConsumeRequest log_consume_request = 4; 
+        CreatePartitionRequest create_partition_request = 5;
+        PingPongRequest ping_pong_request = 6;
     }
 }
 
@@ -29,6 +30,12 @@ message ConsumeRequest {
     uint32 min_num_messages = 3; 
 }
 
+message LogConsumeRequest {
+    uint64 start_offset = 1;
+    uint64 end_offset_exclusively = 2;
+    string partition_name = 3;
+}
+
 message CreatePartitionRequest {
     string partition_name = 1;
 }
@@ -42,7 +49,8 @@ message Response {
         ProduceAck produce_ack = 1;
         ConsumeResponse consume_response = 2;
         CreatePartitionResponse create_partition_response = 3;
-        PingPongResponse ping_pong_response = 4;
+        LogConsumeResponse log_consume_response = 4;
+        PingPongResponse ping_pong_response = 5;
     }
 }
 
@@ -56,6 +64,12 @@ message ProduceAck {
 message ConsumeResponse {
     uint64 end_of_safe_offsets_exclusively = 1;
     string partition_name = 2;
+}
+
+message LogConsumeResponse {
+    bool redirect_s3 = 1;
+    string partition_name = 2;
+    repeated string object_names = 3;
 }
 
 message CreatePartitionResponse {

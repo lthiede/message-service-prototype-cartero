@@ -1,6 +1,7 @@
 package partition
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -10,16 +11,16 @@ import (
 )
 
 type Partition struct {
-	Name                string
-	Alive               bool
-	AliveLock           sync.RWMutex
-	ProduceRequests     chan ProduceRequest
-	PingPongRequests    chan PingPongRequest
-	objectStorageClient *minio.Client
-	quit                chan int
-	logger              *zap.Logger
-	pingPongCount       atomic.Uint64 // initialized to default value 0
-	nextProduceOffset   atomic.Uint64 // initialized to default value 0
+	Name              string
+	Alive             bool
+	AliveLock         sync.RWMutex
+	ProduceRequests   chan ProduceRequest
+	PingPongRequests  chan PingPongRequest
+	quit              chan int
+	logger            *zap.Logger
+	logMock           *logMock
+	pingPongCount     atomic.Uint64 // initialized to default value 0
+	nextProduceOffset atomic.Uint64 // initialized to default value 0
 }
 
 type ProduceRequest struct {
@@ -39,27 +40,18 @@ type ConsumeRequest struct {
 
 func New(name string, objectStorageClient *minio.Client, logger *zap.Logger) (*Partition, error) {
 	logger.Info("Creating new partition", zap.String("partitionName", name))
-	// bucketExists, err := objectStorageClient.BucketExists(context.Background(), name)
-	// if err != nil {
-	// 	return nil, fmt.Errorf("error checking if bucket already exists: %v", err)
-	// }
-	// if bucketExists {
-	// 	logger.Warn("Bucket already exists. It might contain old data", zap.String("partitionName", name))
-	// } else {
-	// 	err := objectStorageClient.MakeBucket(context.Background(), name, minio.MakeBucketOptions{})
-	// 	if err != nil {
-	// 		return nil, fmt.Errorf("error creating bucket: %v", err)
-	// 	}
-	// 	logger.Debug("Created bucket", zap.String("partitionName", name))
-	// }
+	logMock, err := NewLogMock(objectStorageClient, name, logger)
+	if err != nil {
+		return nil, fmt.Errorf("error creating mock of log: %v", err)
+	}
 	p := &Partition{
-		Name:                name,
-		Alive:               true,
-		ProduceRequests:     make(chan ProduceRequest),
-		PingPongRequests:    make(chan PingPongRequest),
-		objectStorageClient: objectStorageClient,
-		quit:                make(chan int),
-		logger:              logger,
+		Name:             name,
+		Alive:            true,
+		ProduceRequests:  make(chan ProduceRequest),
+		PingPongRequests: make(chan PingPongRequest),
+		logMock:          logMock,
+		quit:             make(chan int),
+		logger:           logger,
 	}
 	go p.handleProduce()
 	go p.handlePingPong()
@@ -74,16 +66,11 @@ func (p *Partition) handleProduce() {
 			p.logger.Info("Stop handling produce", zap.String("partitionName", p.Name))
 			return
 		}
-		// _ would contain the number of bytes written
-		// _, err := protodelim.MarshalTo(p.storage, pr.Messages)
-		// if err != nil {
-		// 	p.logger.Error("Failed to write batch to file", zap.Error(err))
-		// 	p.Close()
-		// 	continue
-		// }
+		p.logMock.Persist(pr.Messages)
 		numberMessages := len(pr.Messages.Messages)
-		p.logger.Info("Successfully persisted batch", zap.String("partitionName", p.Name), zap.Uint64("batchId", pr.BatchId), zap.Int("numberMessages", numberMessages))
 		oldNextProduceOffset := p.nextProduceOffset.Load()
+		p.nextProduceOffset.Store(oldNextProduceOffset + uint64(numberMessages))
+		p.logger.Info("Successfully persisted batch", zap.String("partitionName", p.Name), zap.Uint64("batchId", pr.BatchId), zap.Int("numberMessages", numberMessages))
 		p.logger.Info("Acknowledging batch",
 			zap.Uint64("batchId", pr.BatchId),
 			zap.String("partitionName", p.Name),
@@ -99,12 +86,23 @@ func (p *Partition) handleProduce() {
 				},
 			},
 		}
-		p.nextProduceOffset.Store(oldNextProduceOffset + uint64(numberMessages))
 	}
 }
 
 func (p *Partition) NextProduceOffset() uint64 {
-	return p.nextProduceOffset.Load()
+	// return p.nextProduceOffset.Load()
+	// temporarily we return the nextProduceOffset in minio
+	return p.logMock.startOffsetCurrentFile
+}
+
+func (p *Partition) S3ObjectNames(startOffset uint64, endOffsetExclusively uint64) []string {
+	response := make(chan []string)
+	p.logMock.s3ObjectNameRequests <- s3ObjectNameRequest{
+		startOffset:          startOffset,
+		endOffsetExclusively: endOffsetExclusively,
+		response:             response,
+	}
+	return <-response
 }
 
 func (p *Partition) handlePingPong() {
@@ -130,7 +128,6 @@ func (p *Partition) handlePingPong() {
 func (p *Partition) Close() error {
 	p.logger.Debug("Closing partition", zap.String("partitionName", p.Name))
 	close(p.quit)
-	//p.logger.Debug("Closing file", zap.String("partitionName", p.Name), zap.String("file", p.storage.Name()))
-	//p.storage.Close()
+	p.logMock.Close()
 	return nil
 }

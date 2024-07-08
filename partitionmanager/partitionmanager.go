@@ -7,6 +7,7 @@ import (
 
 	"github.com/lthiede/cartero/partition"
 	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
 	"go.uber.org/zap"
 )
 
@@ -18,26 +19,26 @@ type PartitionManager struct {
 	quit                chan struct{}
 }
 
-// func minioClient() (*minio.Client, error) {
-// 	endpoint := "c08:9000"
+func minioClient() (*minio.Client, error) {
+	endpoint := "127.0.0.1:9000"
 
-// 	// Initialize minio client object.
-// 	options := &minio.Options{
-// 		Creds:  credentials.NewStaticV4("minioadmin", "minioadmin", ""),
-// 		Secure: false,
-// 	}
-// 	return minio.New(endpoint, options)
-// }
+	// Initialize minio client object.
+	options := &minio.Options{
+		Creds:  credentials.NewStaticV4("minioadmin", "minioadmin", ""),
+		Secure: false,
+	}
+	return minio.New(endpoint, options)
+}
 
 func New(partitionNames []string, logger *zap.Logger) (*PartitionManager, error) {
-	// minioClient, err := minioClient()
-	// if err != nil {
-	// 	return nil, fmt.Errorf("error trying to create minio client: %v", err)
-	// }
+	minioClient, err := minioClient()
+	if err != nil {
+		return nil, fmt.Errorf("error trying to create minio client: %v", err)
+	}
 	logger.Info("Created object storage client")
 	partitions := map[string]*partition.Partition{}
 	for _, partitionName := range partitionNames {
-		p, err := partition.New(partitionName, nil, logger)
+		p, err := partition.New(partitionName, minioClient, logger)
 		if err != nil {
 			return nil, fmt.Errorf("error creating partition %s: %v", partitionName, err)
 		}
@@ -45,7 +46,7 @@ func New(partitionNames []string, logger *zap.Logger) (*PartitionManager, error)
 	}
 	pm := &PartitionManager{
 		partitions:          partitions,
-		objectStorageClient: nil,
+		objectStorageClient: minioClient,
 		logger:              logger,
 		quit:                make(chan struct{}),
 	}

@@ -1,5 +1,5 @@
 ## Chosen for development
-- TODO: measure synchronization with atomics
+- rework consuming to have building blocking until right message is there
 
 ## Features
 - TODO: add committing offsets

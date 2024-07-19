@@ -36,7 +36,7 @@ func (c *Client) CreatePartition(partitionName string) error {
 	successful := <-successChan
 	delete(c.expectedCreatePartitionRes, partitionName)
 	if !successful {
-		return fmt.Errorf("creating partition %s failed on the server side. maybe it already exists", partitionName)
+		return fmt.Errorf("creating partition %s failed on the server side", partitionName)
 	}
 	return nil
 }

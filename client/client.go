@@ -25,25 +25,24 @@ type Client struct {
 	consumersRWMutex           sync.RWMutex
 	expectedCreatePartitionRes map[string]chan bool
 	objectStorageClient        *minio.Client
+	minioAddress               string
 	done                       chan struct{}
 }
 
-func minioClient() (*minio.Client, error) {
-	endpoint := "127.0.0.1:9000"
-
+func minioClient(address string) (*minio.Client, error) {
 	// Initialize minio client object.
 	options := &minio.Options{
 		Creds:  credentials.NewStaticV4("minioadmin", "minioadmin", ""),
 		Secure: false,
 	}
-	return minio.New(endpoint, options)
+	return minio.New(address, options)
 }
 
-func New(address string, logger *zap.Logger) (*Client, error) {
-	return NewWithOptions(address, "" /*localAddr*/, logger)
+func New(address string, minioAddress string, logger *zap.Logger) (*Client, error) {
+	return NewWithOptions(address, minioAddress, "" /*localAddr*/, logger)
 }
 
-func NewWithOptions(address string, localAddr string, logger *zap.Logger) (*Client, error) {
+func NewWithOptions(address string, minioAddress string, localAddr string, logger *zap.Logger) (*Client, error) {
 	dialer := &net.Dialer{}
 	if localAddr != "" {
 		dialer.LocalAddr = &net.TCPAddr{
@@ -64,6 +63,7 @@ func NewWithOptions(address string, localAddr string, logger *zap.Logger) (*Clie
 		pingPongs:                  map[string]*PingPong{},
 		consumers:                  map[string]*Consumer{},
 		expectedCreatePartitionRes: map[string]chan bool{},
+		minioAddress:               minioAddress,
 		done:                       make(chan struct{}),
 	}
 	go client.handleResponses()
@@ -127,7 +127,7 @@ func (c *Client) handleResponses() {
 					c.logger.Error("Partition not recognized", zap.String("partitionName", logConsumeRes.PartitionName))
 					continue
 				}
-				c.logger.Info("Client received s3 objects to read", zap.String("partitionName", logConsumeRes.PartitionName), zap.Strings("s3Objects", logConsumeRes.ObjectNames))
+				// c.logger.Info("Client received s3 objects to read", zap.String("partitionName", logConsumeRes.PartitionName), zap.Strings("s3Objects", logConsumeRes.ObjectNames))
 				cons.NewS3ObjectNames <- logConsumeRes.ObjectNames
 				c.consumersRWMutex.RUnlock()
 			case *pb.Response_CreatePartitionResponse:

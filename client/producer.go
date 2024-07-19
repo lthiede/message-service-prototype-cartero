@@ -11,8 +11,8 @@ import (
 	"google.golang.org/protobuf/encoding/protodelim"
 )
 
-const MaxMessagesPerBatch = 10
-const MaxPublishDelay = 100 * time.Millisecond
+var MaxMessagesPerBatch = 10
+var MaxPublishDelay = 100 * time.Millisecond
 
 type Producer struct {
 	client                *Client
@@ -25,6 +25,8 @@ type Producer struct {
 	numMessagesAck        atomic.Uint64 // implicitly starts at 0
 	Input                 chan []byte
 	Error                 chan ProduceError
+	Acks                  chan uint64
+	returnAcksOnChan      bool
 	done                  chan struct{}
 }
 
@@ -38,20 +40,25 @@ type ProduceAck struct {
 	NumMessagesAck uint64
 }
 
-func (client *Client) NewProducer(partitionName string) (*Producer, error) {
+func (client *Client) NewProducer(partitionName string, ReturnAcksOnChan bool) (*Producer, error) {
 	client.producersRWMutex.Lock()
 	p, ok := client.producers[partitionName]
 	if ok {
 		return p, nil
 	}
 	p = &Producer{
-		client:        client,
-		conn:          client.conn,
-		logger:        client.logger,
-		partitionName: partitionName,
-		Input:         make(chan []byte),
-		Error:         make(chan ProduceError),
-		done:          make(chan struct{}),
+		client:           client,
+		conn:             client.conn,
+		logger:           client.logger,
+		partitionName:    partitionName,
+		Input:            make(chan []byte),
+		Error:            make(chan ProduceError),
+		Acks:             make(chan uint64),
+		returnAcksOnChan: ReturnAcksOnChan,
+		done:             make(chan struct{}),
+	}
+	if !ReturnAcksOnChan {
+		close(p.Acks)
 	}
 	client.producers[partitionName] = p
 	client.producersRWMutex.Unlock()
@@ -132,7 +139,12 @@ func (p *Producer) sendBatch() {
 
 func (p *Producer) UpdateAcknowledged(batchId uint64, numMessages uint64) {
 	p.batchIdUnacknowledged.Store(batchId + 1)
-	p.numMessagesAck.Store(p.numMessagesAck.Load() + numMessages)
+	newNumMessagesAck := p.numMessagesAck.Load() + numMessages
+	p.numMessagesAck.Store(newNumMessagesAck)
+	// this can block the main loop for receiving messages
+	if p.returnAcksOnChan {
+		p.Acks <- newNumMessagesAck
+	}
 }
 
 func (p *Producer) NumMessagesAck() uint64 {

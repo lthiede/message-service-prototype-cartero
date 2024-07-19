@@ -19,19 +19,17 @@ type PartitionManager struct {
 	quit                chan struct{}
 }
 
-func minioClient() (*minio.Client, error) {
-	endpoint := "127.0.0.1:9000"
-
+func minioClient(address string) (*minio.Client, error) {
 	// Initialize minio client object.
 	options := &minio.Options{
 		Creds:  credentials.NewStaticV4("minioadmin", "minioadmin", ""),
 		Secure: false,
 	}
-	return minio.New(endpoint, options)
+	return minio.New(address, options)
 }
 
-func New(partitionNames []string, logger *zap.Logger) (*PartitionManager, error) {
-	minioClient, err := minioClient()
+func New(partitionNames []string, minioAddress string, logger *zap.Logger) (*PartitionManager, error) {
+	minioClient, err := minioClient(minioAddress)
 	if err != nil {
 		return nil, fmt.Errorf("error trying to create minio client: %v", err)
 	}
@@ -53,27 +51,18 @@ func New(partitionNames []string, logger *zap.Logger) (*PartitionManager, error)
 	return pm, nil
 }
 
-func (pm *PartitionManager) exists(partitionName string) bool {
-	pm.rwMutex.RLock()
-	defer pm.rwMutex.RUnlock()
-	_, ok := pm.partitions[partitionName]
-	return ok
-}
-
 func (pm *PartitionManager) CreatePartition(partitionName string) error {
 	pm.logger.Info("Received partition create request", zap.String("partitionName", partitionName))
-	if pm.exists(partitionName) {
+	pm.rwMutex.Lock()
+	defer pm.rwMutex.Unlock()
+	if _, ok := pm.partitions[partitionName]; ok {
 		pm.logger.Warn("Tried to create partition that already existed", zap.String("partitionName", partitionName))
 		return nil
 	}
-	// this is unsynchronized. currently there might be e.g. name collisions
-	// this can be solved in the future by creating buckets with randomness appended to name
 	p, err := partition.New(partitionName, pm.objectStorageClient, pm.logger)
 	if err != nil {
 		return fmt.Errorf("error creating new partition: %v", err)
 	}
-	pm.rwMutex.Lock()
-	defer pm.rwMutex.Unlock()
 	pm.partitions[partitionName] = p
 	return nil
 }

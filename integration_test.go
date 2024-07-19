@@ -21,7 +21,7 @@ func setupServer(partitionNames []string) (*server.Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	server, err := server.New(partitionNames, "localhost:8080", logger)
+	server, err := server.New(partitionNames, "localhost:8080", "localhost:9000", logger)
 	if err != nil {
 		return nil, err
 	}
@@ -35,7 +35,7 @@ func setupClient() (*client.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	client, err := client.New("localhost:8080", logger)
+	client, err := client.New("localhost:8080", "localhost:9000", logger)
 	if err != nil {
 		return nil, err
 	}
@@ -58,7 +58,7 @@ func waitForAcks(expectedNumAck int, producer *client.Producer, timeout <-chan i
 }
 
 func produce(numberMessages int, partitionName string, client *client.Client, maxInFlight int, wg *sync.WaitGroup, errChan chan<- error) {
-	producer, err := client.NewProducer(partitionName)
+	producer, err := client.NewProducer(partitionName, false)
 	if err != nil {
 		errChan <- err
 		wg.Done()
@@ -109,8 +109,6 @@ func waitForSafeOffset(startOffset uint64, expectedEndOfSafeOffsets uint64, inOr
 			expectedMessage := fmt.Sprintf("%s_%d", partitionName, currentOffset)
 			if string(message) != expectedMessage {
 				return fmt.Errorf("Client received message out of order expected %s but got %s", expectedMessage, string(message))
-			} else {
-				fmt.Printf("Client received message %s \n", string(message))
 			}
 		}
 		select {
@@ -315,6 +313,34 @@ func TestAddingPartitions(t *testing.T) {
 			t.Error(err)
 		default:
 			return
+		}
+	}
+}
+
+// TestAddingPartitionSimultaneously tests adding the partition at the same time from multiple clients
+func TestAddingPartitionSimultaneously(t *testing.T) {
+	server, err := setupServer([]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	numClients := 5
+	results := make(chan error)
+	for range numClients {
+		go func() {
+			client0, err := setupClient()
+			if err != nil {
+				results <- err
+			}
+			defer client0.Close()
+			err = client0.CreatePartition("testpartition")
+			results <- err
+		}()
+	}
+	for range numClients {
+		err := <-results
+		if err != nil {
+			log.Fatal(err)
 		}
 	}
 }

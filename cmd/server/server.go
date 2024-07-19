@@ -15,6 +15,7 @@ import (
 var cpuFlag = flag.Bool("c", false, "do cpu profiling")
 var blockFlag = flag.Bool("b", false, "do block profiling")
 var mutexFlag = flag.Bool("m", false, "do mutex profiling")
+var objectStorageAddressFlag = flag.String("o", "172.18.94.80:9000", "address of minio")
 
 func main() {
 	flag.Parse()
@@ -34,7 +35,7 @@ func main() {
 		log.Panicf("Error creating logger: %v", err)
 	}
 	defer logger.Sync()
-	server, err := server.New([]string{"partition0", "partition1", "partition2"}, "172.18.94.80:8080", logger)
+	server, err := server.New([]string{}, "172.18.94.70:8080", *objectStorageAddressFlag, logger)
 	if err != nil {
 		logger.Panic("Error creating server", zap.Error(err))
 	}

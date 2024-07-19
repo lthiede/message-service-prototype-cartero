@@ -100,11 +100,13 @@ func (lm *logMock) Persist(messages *pb.Messages) error {
 	return nil
 }
 
+var waitToPersist time.Duration = 8500 * time.Millisecond
+
 func (lm *logMock) synchedLoop() {
 	lm.logger.Info("Start archiving log files to object storage", zap.String("partitionName", lm.name))
 	upload := make(chan struct{})
 	go func() {
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(waitToPersist)
 		upload <- struct{}{}
 	}()
 	for {
@@ -115,7 +117,7 @@ func (lm *logMock) synchedLoop() {
 		case <-upload:
 			lm.uploadToS3()
 			go func() {
-				time.Sleep(100 * time.Millisecond)
+				time.Sleep(waitToPersist)
 				upload <- struct{}{}
 			}()
 		case req := <-lm.s3ObjectNameRequests:
@@ -176,7 +178,6 @@ func (lm *logMock) s3ObjectNames(startOffset uint64, endOffsetExclusively uint64
 	if !foundExactly {
 		position--
 	}
-	fmt.Printf("files we have %v position of file we're adding %d start offset %d end offset %d", lm.archivedFiles, position, startOffset, endOffsetExclusively)
 	objectNames = append(objectNames, strconv.FormatUint(lm.archivedFiles[position], 10))
 	position++
 	for position < len(lm.archivedFiles) && lm.archivedFiles[position] < endOffsetExclusively {

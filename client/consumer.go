@@ -31,6 +31,14 @@ type Consumer struct {
 	endOfSafeOffsetsExclusively atomic.Uint64
 	NewS3ObjectNames            chan []string
 	objectStorageClient         *minio.Client
+	CollectMetrics              bool
+	Metrics                     MinioMetrics
+}
+
+type MinioMetrics struct {
+	Latencies []time.Duration
+	Files     int
+	Messages  int
 }
 
 func (client *Client) NewConsumer(partitionName string, startOffset uint64) (*Consumer, error) {
@@ -45,11 +53,14 @@ func (client *Client) NewConsumer(partitionName string, startOffset uint64) (*Co
 			NewS3ObjectNames:   make(chan []string),
 			NextOffsetToReturn: startOffset,
 			s3ObjectNames:      make([]string, 0),
+			Metrics: MinioMetrics{
+				Latencies: make([]time.Duration, 0),
+			},
 		}
 		client.consumers[partitionName] = c
 	}
 	if client.objectStorageClient == nil {
-		objectStorageClient, err := minioClient()
+		objectStorageClient, err := minioClient(client.minioAddress)
 		if err != nil {
 			return nil, fmt.Errorf("failed to make minio client: %v", err)
 		}
@@ -86,15 +97,25 @@ func (c *Consumer) EndOfSafeOffsetsExclusively() uint64 {
 	return c.endOfSafeOffsetsExclusively.Load()
 }
 
+const Timeout = 100 * time.Microsecond
+
+var ErrTimeout = errors.New("waiting for new messages timed out")
+
 func (c *Consumer) ensureMinioObjectNames() error {
 	if len(c.s3ObjectNames) != 0 {
 		return nil
 	}
 	endOffsetExclusively := c.endOfSafeOffsetsExclusively.Load()
-	c.logger.Info("Querying next minio object names", zap.String("partitionName", c.partitionName), zap.Uint64("startOffset", c.NextOffsetToReturn), zap.Uint64("endOffsetExclusively", endOffsetExclusively))
-	for c.endOfSafeOffsetsExclusively.Load() <= c.NextOffsetToReturn {
+	timeWaited := 0 * time.Microsecond
+	for endOffsetExclusively <= c.NextOffsetToReturn {
+		if timeWaited >= Timeout {
+			return ErrTimeout
+		}
 		time.Sleep(10 * time.Microsecond)
+		timeWaited += 10 * time.Microsecond
+		endOffsetExclusively = c.endOfSafeOffsetsExclusively.Load()
 	}
+	c.logger.Info("Querying next minio object names", zap.String("partitionName", c.partitionName), zap.Uint64("startOffset", c.NextOffsetToReturn), zap.Uint64("endOffsetExclusively", endOffsetExclusively))
 	req := &pb.Request{
 		Request: &pb.Request_LogConsumeRequest{
 			LogConsumeRequest: &pb.LogConsumeRequest{
@@ -127,15 +148,29 @@ func (c *Consumer) ensureMinioObject() error {
 	}
 	c.logger.Info("Downloading next minio object", zap.String("partitionName", c.partitionName))
 	err := c.ensureMinioObjectNames()
+	if err == ErrTimeout {
+		return err
+	}
 	if err != nil {
 		return fmt.Errorf("failed to ensure minio object names present: %v", err)
 	}
 	nextS3Object := c.s3ObjectNames[0]
 	c.s3ObjectNames = c.s3ObjectNames[1:]
-	object, err := c.objectStorageClient.GetObject(context.TODO(), c.partitionName, nextS3Object, minio.GetObjectOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to download object from s3: %v", err)
+	var object *minio.Object
+	if c.CollectMetrics {
+		start := time.Now()
+		object, err = c.objectStorageClient.GetObject(context.TODO(), c.partitionName, nextS3Object, minio.GetObjectOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to download object from s3: %v", err)
+		}
+		c.Metrics.Latencies = append(c.Metrics.Latencies, time.Since(start))
+	} else {
+		object, err = c.objectStorageClient.GetObject(context.TODO(), c.partitionName, nextS3Object, minio.GetObjectOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to download object from s3: %v", err)
+		}
 	}
+	c.Metrics.Files++
 	c.currentObject = object
 	stats, err := c.currentObject.Stat()
 	if err != nil {
@@ -162,10 +197,13 @@ func (c *Consumer) ensureCurrentBatch() error {
 	c.currentBatch = nil
 	for c.currentBatch == nil {
 		err := c.ensureMinioObject()
+		if err == ErrTimeout {
+			return err
+		}
 		if err != nil {
 			return fmt.Errorf("failed to ensure minio object is present locally: %v", err)
 		}
-		c.logger.Info("Unmarshaling next batch", zap.String("partitionName", c.partitionName))
+		// c.logger.Info("Unmarshaling next batch", zap.String("partitionName", c.partitionName))
 		var messages pb.Messages
 		err = protodelim.UnmarshalFrom(&readertobytereader.ReaderByteReader{Reader: c.currentObject}, &messages)
 		if err == io.EOF {
@@ -175,7 +213,7 @@ func (c *Consumer) ensureCurrentBatch() error {
 		} else if err != nil {
 			return fmt.Errorf("failed to unmarshal next message batch: %v", err)
 		}
-		c.logger.Info("Read batch from s3 object", zap.String("partitionName", c.partitionName))
+		// c.logger.Info("Read batch from s3 object", zap.String("partitionName", c.partitionName))
 		if len(messages.Messages) == 0 {
 			return errors.New("unmarshaled empty batch")
 		}
@@ -187,29 +225,63 @@ func (c *Consumer) ensureCurrentBatch() error {
 // consumeNext returns the next available message regardless of c.NextOffsetToReturn
 func (c *Consumer) consumeNext() ([]byte, error) {
 	err := c.ensureCurrentBatch()
+	if err == ErrTimeout {
+		return nil, err
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to ensure batch locally present: %v", err)
 	}
 	result := c.currentBatch[0]
 	c.currentBatch = c.currentBatch[1:]
 	c.currentObjectNextOffset++
+	if c.CollectMetrics {
+		c.Metrics.Messages++
+	}
 	return result, nil
 }
 
 // Consume returns the message with index c.NextOffsetToReturn
 func (c *Consumer) Consume() ([]byte, error) {
-	c.logger.Info("Consume called", zap.String("partitionName", c.partitionName))
+	// c.logger.Info("Consume called", zap.String("partitionName", c.partitionName))
 	var result []byte
 	for c.currentObjectNextOffset <= c.NextOffsetToReturn {
 		var err error
 		result, err = c.consumeNext()
+		if err == ErrTimeout {
+			return nil, err
+		}
 		if err != nil {
 			return nil, fmt.Errorf("failed to get next message: %v", err)
 		}
 	}
 	c.NextOffsetToReturn++
-	c.logger.Info("Returning message at the front of current batch", zap.String("partitionName", c.partitionName), zap.String("message", string(result)))
+	// c.logger.Info("Returning message at the front of current batch", zap.String("partitionName", c.partitionName), zap.String("message", string(result)))
 	return result, nil
+}
+
+func (c *Consumer) ConsumeWholeObject() error {
+	err := c.ensureMinioObject()
+	if err == ErrTimeout {
+		return err
+	}
+	if err != nil {
+		return fmt.Errorf("failed to ensure minio object locally present: %v", err)
+	}
+	stats, err := c.currentObject.Stat()
+	if err != nil {
+		return fmt.Errorf("failed to get current object stats: %v", err)
+	}
+	b := make([]byte, stats.Size)
+	n, err := c.currentObject.Read(b)
+	if err != nil && err != io.EOF {
+		return fmt.Errorf("failed to read object: %v", err)
+	}
+	if n < int(stats.Size) {
+		return fmt.Errorf("couldn't read expected number of bytes from object: expected %d got %d", stats.Size, n)
+	}
+	c.logger.Info("Read bytes from object", zap.Int("numBytes", n))
+	c.currentObject = nil
+	return nil
 }
 
 func (c *Consumer) Close() error {

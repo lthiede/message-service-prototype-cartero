@@ -149,6 +149,9 @@ func (c *Connection) handleRequests() {
 			case *pb.Request_CreatePartitionRequest:
 				createPartitionRequest := req.CreatePartitionRequest
 				err := c.partitionManager.CreatePartition(createPartitionRequest.PartitionName)
+				if err != nil {
+					c.logger.Error("Failed to create partition", zap.Error(err))
+				}
 				response := &pb.Response{
 					Response: &pb.Response_CreatePartitionResponse{
 						CreatePartitionResponse: &pb.CreatePartitionResponse{

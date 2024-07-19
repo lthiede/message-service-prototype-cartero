@@ -134,7 +134,7 @@ func runClient(clientNumber int, warmUp chan int, measuring chan int, coolDown c
 		fmt.Printf("Failed to create logger: %v \n", err)
 		os.Exit(1)
 	}
-	c, err := client.NewWithOptions("172.18.94.80:8080", *lFlag, logger)
+	c, err := client.NewWithOptions("172.18.94.80:8080", "172.18.94.80:9000", *lFlag, logger)
 	if err != nil {
 		logger.Fatal("Failed to create client", zap.Error(err))
 	}

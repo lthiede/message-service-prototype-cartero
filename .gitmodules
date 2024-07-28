@@ -1,0 +1,3 @@
+[submodule "client/anyblob/AnyBlob"]
+	path = client/anyblob/AnyBlob
+	url = git@github.com:durner/AnyBlob.git

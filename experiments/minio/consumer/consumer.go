@@ -6,20 +6,28 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
+	"runtime"
 	"slices"
 	"strconv"
 	"time"
 
 	"github.com/lthiede/cartero/client"
 	"go.uber.org/zap"
+	"golang.org/x/text/language"
+	"golang.org/x/text/message"
 )
 
 type intSlice []int
 
 var nFlag intSlice
-var lFlag = flag.String("l", "", "local address")
-var pFlag = flag.Bool("p", true, "actually parse messages")
+var cFlag intSlice
+var bFlag = flag.String("b", "testpartition", "bucket name")
+var oFlag = flag.String("o", "localhost:9000", "address of object storage (s3/minio)")
+var aFlag = flag.String("a", "minioadmin", "access key for s3")
+var sFlag = flag.String("s", "minioadmin", "secret access key for s3")
 
 func (n *intSlice) String() string {
 	return fmt.Sprintf("%v", []int(*n))
@@ -34,31 +42,36 @@ func (n *intSlice) Set(value string) error {
 	return nil
 }
 
-const partitionPrefix = "testpartition"
-const WarmUpPeriod = 20 * time.Second
-const MeasuringPeriod = 60 * time.Second
-const CoolDownPeriod = 20 * time.Second
+const WarmUpPeriod = 10 * time.Second
+const MeasuringPeriod = 10 * time.Hour
+const CoolDownPeriod = 10 * time.Second
+
+// const WarmUpPeriod = 20 * time.Hour
+// const MeasuringPeriod = 60 * time.Hour
+// const CoolDownPeriod = 20 * time.Hour
 
 type consumeExperimentResult struct {
-	numConsumers int
-	p25          time.Duration
-	p50          time.Duration
-	p75          time.Duration
-	p90          time.Duration
-	p99          time.Duration
-	p99_9        time.Duration
-	p99_99       time.Duration
-	p99_999      time.Duration
-	fps          float64
-	mps          float64
+	bpsDownloaded float64
+	fpsDownloaded float64
+	bpsConsumed   float64
+	fpsConsumed   float64
+	p25           time.Duration
+	p50           time.Duration
+	p75           time.Duration
+	p90           time.Duration
+	p99           time.Duration
+	p99_9         time.Duration
+	p99_99        time.Duration
 }
 
-var csvHeader = []string{"numConsumers", "p25", "p50", "p75", "p90", "p99", "p99.9", "p99.99", "p99.999", "mps", "fps"}
+var csvHeader = []string{"numConsumers", "concurrency", "bpsDownloaded", "fpsDownloaded", "bpsConsumed", "fpsConsumed", "p25", "p50", "p75", "p90", "p99", "p99.9", "p99.99"}
 
 func main() {
-	flag.Var(&nFlag, "n", "number client")
+	flag.Var(&nFlag, "n", "number clients")
+	flag.Var(&cFlag, "c", "concurrent downloads per client")
 	flag.Parse()
-	file, err := os.Create("results_consumer_minio")
+	fileName := "consumer_minio"
+	file, err := os.Create(fileName)
 	if err != nil {
 		log.Println(err.Error())
 		return
@@ -66,27 +79,31 @@ func main() {
 	defer file.Close()
 	csvWriter := csv.NewWriter(file)
 	csvWriter.Write(csvHeader)
-	for _, i := range nFlag {
-		// continue here
-		e := runExperiment(i)
-		row := make([]string, 0, 11)
-		row = append(row, strconv.Itoa(e.numConsumers))
-		row = append(row, strconv.FormatInt(e.p25.Microseconds(), 10))
-		row = append(row, strconv.FormatInt(e.p50.Microseconds(), 10))
-		row = append(row, strconv.FormatInt(e.p75.Microseconds(), 10))
-		row = append(row, strconv.FormatInt(e.p90.Microseconds(), 10))
-		row = append(row, strconv.FormatInt(e.p99.Microseconds(), 10))
-		row = append(row, strconv.FormatInt(e.p99_9.Microseconds(), 10))
-		row = append(row, strconv.FormatInt(e.p99_99.Microseconds(), 10))
-		row = append(row, strconv.FormatInt(e.p99_999.Microseconds(), 10))
-		row = append(row, strconv.FormatFloat(e.mps, 'g', -1, 64))
-		row = append(row, strconv.FormatFloat(e.fps, 'g', -1, 64))
-		csvWriter.Write(row)
-		csvWriter.Flush()
+	for _, n := range nFlag {
+		for _, c := range cFlag {
+			// continue here
+			e := runExperiment(n, c)
+			row := make([]string, 0, len(csvHeader))
+			row = append(row, strconv.Itoa(n))
+			row = append(row, strconv.Itoa(c))
+			row = append(row, strconv.FormatFloat(e.bpsDownloaded, 'g', -1, 64))
+			row = append(row, strconv.FormatFloat(e.fpsDownloaded, 'g', -1, 64))
+			row = append(row, strconv.FormatFloat(e.bpsConsumed, 'g', -1, 64))
+			row = append(row, strconv.FormatFloat(e.fpsConsumed, 'g', -1, 64))
+			row = append(row, strconv.Itoa(int(e.p25.Microseconds())))
+			row = append(row, strconv.Itoa(int(e.p50.Microseconds())))
+			row = append(row, strconv.Itoa(int(e.p75.Microseconds())))
+			row = append(row, strconv.Itoa(int(e.p90.Microseconds())))
+			row = append(row, strconv.Itoa(int(e.p99.Microseconds())))
+			row = append(row, strconv.Itoa(int(e.p99_9.Microseconds())))
+			row = append(row, strconv.Itoa(int(e.p99_99.Microseconds())))
+			csvWriter.Write(row)
+			csvWriter.Flush()
+		}
 	}
 }
 
-func runExperiment(n int) consumeExperimentResult {
+func runExperiment(n int, c int) consumeExperimentResult {
 	warmUp := make(chan int)
 	go func() {
 		time.Sleep(WarmUpPeriod)
@@ -104,26 +121,30 @@ func runExperiment(n int) consumeExperimentResult {
 	}()
 	flag.Parse()
 	fmt.Printf("Starting %d consumers \n", n)
-	fmt.Printf("Using local address %s \n", *lFlag)
-	fmt.Printf("Parsing messages %t \n", *pFlag)
 	resultsChan := make(chan client.MinioMetrics)
 	for i := 0; i < n; i++ {
-		go runClient(i, fmt.Sprintf("%s%d", partitionPrefix, 4), warmUp, measuring, coolDown, resultsChan)
+		go runClient(i, c, warmUp, measuring, coolDown, resultsChan)
 	}
+	go func() {
+		log.Println(http.ListenAndServe("localhost:6060", nil))
+	}()
 	fmt.Println("Wait for results")
-	latencySamples := make([]time.Duration, 0)
-	messages := 0
-	files := 0
+	latencies := make([]time.Duration, 0)
+	var bytesDownloaded uint64
+	filesDownloaded := 0
+	var bytesConsumed uint64
+	filesConsumed := 0
 	for i := 0; i < n; i++ {
 		result := <-resultsChan
-		latencySamples = append(latencySamples, result.Latencies...)
-		messages += result.Messages
-		files += result.Files
+		latencies = append(latencies, result.FirstByteLatencies...)
+		bytesDownloaded += result.BytesDownloaded
+		filesDownloaded += result.FilesDownloaded
+		bytesConsumed += result.BytesConsumed
+		filesConsumed += result.FilesConsumed
 	}
 	fmt.Println("Got all results")
-	log.Println(latencySamples)
-	slices.Sort(latencySamples)
-	length := float64(len(latencySamples))
+	slices.Sort(latencies)
+	length := float64(len(latencies))
 	p25Index := int(math.Round(length*0.25) - 1)
 	p50Index := int(math.Round(length/2) - 1)
 	p75Index := int(math.Round(length*0.75) - 1)
@@ -131,128 +152,112 @@ func runExperiment(n int) consumeExperimentResult {
 	p99Index := int(math.Round(length*0.99) - 1)
 	p99_9Index := int(math.Round(length*0.999) - 1)
 	p99_99Index := int(math.Round(length*0.9999) - 1)
-	p99_999Index := int(math.Round(length*0.99999) - 1)
-	p25 := latencySamples[p25Index]
-	p50 := latencySamples[p50Index]
-	p75 := latencySamples[p75Index]
-	p90 := latencySamples[p90Index]
-	p99 := latencySamples[p99Index]
-	p99_9 := latencySamples[p99_9Index]
-	p99_99 := latencySamples[p99_99Index]
-	p99_999 := latencySamples[p99_999Index]
-	mps := float64(messages) / MeasuringPeriod.Seconds()
-	fps := float64(files) / MeasuringPeriod.Seconds()
+	p25 := latencies[p25Index]
+	p50 := latencies[p50Index]
+	p75 := latencies[p75Index]
+	p90 := latencies[p90Index]
+	p99 := latencies[p99Index]
+	p99_9 := latencies[p99_9Index]
+	p99_99 := latencies[p99_99Index]
+	bpsDownloaded := float64(bytesDownloaded) / MeasuringPeriod.Seconds()
+	fpsDownloaded := float64(filesDownloaded) / MeasuringPeriod.Seconds()
+	bpsConsumed := float64(bytesConsumed) / MeasuringPeriod.Seconds()
+	fpsConsumed := float64(filesConsumed) / MeasuringPeriod.Seconds()
+	fmt.Println("Aggregated results")
 	return consumeExperimentResult{
-		numConsumers: n,
-		p25:          p25,
-		p50:          p50,
-		p75:          p75,
-		p90:          p90,
-		p99:          p99,
-		p99_9:        p99_9,
-		p99_99:       p99_99,
-		p99_999:      p99_999,
-		mps:          mps,
-		fps:          fps,
+		bpsDownloaded: bpsDownloaded,
+		fpsDownloaded: fpsDownloaded,
+		bpsConsumed:   bpsConsumed,
+		fpsConsumed:   fpsConsumed,
+		p25:           p25,
+		p50:           p50,
+		p75:           p75,
+		p90:           p90,
+		p99:           p99,
+		p99_9:         p99_9,
+		p99_99:        p99_99,
 	}
 }
 
-func runClient(clientNumber int, partitionName string, warmUp chan int, measuring chan int, coolDown chan int, resultsChan chan client.MinioMetrics) {
+func runClient(clientNumber int, concurrency int, warmUp chan int, measuring chan int, coolDown chan int, resultsChan chan client.MinioMetrics) {
 	logger, err := zap.NewDevelopment()
 	if err != nil {
 		fmt.Printf("Failed to create logger: %v \n", err)
 		os.Exit(1)
 	}
-	c, err := client.NewWithOptions("172.18.94.70:8080", "172.18.94.80:9000", *lFlag, logger)
-	if err != nil {
-		logger.Fatal("Failed to create client", zap.Error(err))
-	}
-	client.MaxMessagesPerBatch = 1
-	err = c.CreatePartition(partitionName)
-	if err != nil {
-		logger.Fatal("Failed to create partition", zap.Error(err))
-	}
-	consumer, err := c.NewConsumer(partitionName, 0)
+	client.Concurrency = concurrency
+	consumer, err := client.NewBenchmarkConsumer(*bFlag, *oFlag, *aFlag, *sFlag, logger)
 	if err != nil {
 		logger.Fatal("Failed to create ping pong client", zap.Error(err))
 	}
 	if clientNumber == 0 {
-		logger.Info("Start warmup")
+
+		memStats := &runtime.MemStats{}
+		runtime.ReadMemStats(memStats)
+		logger.Info("Start warmup", zap.String("heapAlloc", message.NewPrinter(language.English).Sprintf("%d", memStats.HeapAlloc)))
 	}
+	consumer.CollectMetricsLock.Lock()
 	consumer.CollectMetrics = false
+	consumer.CollectMetricsLock.Unlock()
 warmUp:
 	for {
 		select {
 		case <-warmUp:
 			break warmUp
 		default:
-			var err error
-			if *pFlag {
-				_, err = consumer.Consume()
-			} else {
-				err = consumer.ConsumeWholeObject()
-			}
+			err := consumer.NextObject()
 			if err == client.ErrTimeout {
-				logger.Warn("Producer didn't produce enough messages", zap.Error(err))
-			}
-			if err != nil {
-				logger.Warn("Error while consuming", zap.Error(err))
+				logger.Warn("Non fatal timeout", zap.Error(err))
+			} else if err != nil {
+				logger.Panic("Error while consuming", zap.Error(err))
 			}
 		}
 	}
 	if clientNumber == 0 {
 		logger.Info("Start measuring")
 	}
+	consumer.CollectMetricsLock.Lock()
 	consumer.CollectMetrics = true
+	consumer.CollectMetricsLock.Unlock()
 measuring:
 	for {
 		select {
 		case <-measuring:
 			break measuring
 		default:
-			if *pFlag {
-				_, err = consumer.Consume()
-			} else {
-				err = consumer.ConsumeWholeObject()
-			}
+			err := consumer.NextObject()
 			if err == client.ErrTimeout {
-				logger.Warn("Producer didn't produce enough messages", zap.Error(err))
-			}
-			if err != nil {
-				logger.Warn("Error while consuming", zap.Error(err))
+				logger.Warn("Non fatal timeout", zap.Error(err))
+			} else if err != nil {
+				logger.Panic("Error while consuming", zap.Error(err))
 			}
 		}
 	}
 	if clientNumber == 0 {
 		logger.Info("Start cooldown")
 	}
+	consumer.CollectMetricsLock.Lock()
 	consumer.CollectMetrics = false
+	consumer.CollectMetricsLock.Unlock()
 coolDown:
 	for {
 		select {
 		case <-coolDown:
 			break coolDown
 		default:
-			if *pFlag {
-				_, err = consumer.Consume()
-			} else {
-				err = consumer.ConsumeWholeObject()
-			}
+			err := consumer.NextObject()
 			if err == client.ErrTimeout {
-				logger.Warn("Producer didn't produce enough messages", zap.Error(err))
-			}
-			if err != nil {
-				logger.Warn("Error while consuming", zap.Error(err))
+				logger.Warn("Non fatal timeout", zap.Error(err))
+			} else if err != nil {
+				logger.Panic("Error while consuming", zap.Error(err))
 			}
 		}
 	}
 	if clientNumber == 0 {
 		logger.Info("Returning results")
 	}
-	if !*pFlag {
-		consumer.Metrics.Messages = 1
-	}
-	resultsChan <- consumer.Metrics
+	consumer.Close()
+	resultsChan <- consumer.Metrics()
 	if clientNumber == 0 {
 		logger.Info("Finished")
 	}

@@ -43,7 +43,7 @@ func NewLogMock(objectStorageClient *minio.Client, name string, logger *zap.Logg
 		return nil, fmt.Errorf("error checking if bucket already exists: %v", err)
 	}
 	if bucketExists {
-		logger.Warn("Bucket already exists. It might contain old data", zap.String("partitionName", name))
+		logger.Info("Bucket already exists. Checking for old data", zap.String("partitionName", name))
 	} else {
 		err := objectStorageClient.MakeBucket(context.TODO(), name, minio.MakeBucketOptions{})
 		if err != nil {
@@ -100,7 +100,7 @@ func (lm *logMock) Persist(messages *pb.Messages) error {
 	return nil
 }
 
-var waitToPersist time.Duration = 8500 * time.Millisecond
+var waitToPersist time.Duration = 4200 * time.Millisecond
 
 func (lm *logMock) synchedLoop() {
 	lm.logger.Info("Start archiving log files to object storage", zap.String("partitionName", lm.name))

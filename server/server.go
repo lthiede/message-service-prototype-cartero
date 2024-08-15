@@ -18,9 +18,9 @@ type Server struct {
 	quit             chan struct{}
 }
 
-func New(partitionNames []string, address string, minioAddress string, logger *zap.Logger) (*Server, error) {
+func New(partitionNames []string, address string, minioAddress string, s3AccessKey string, s3SecretAccessKey string, logger *zap.Logger) (*Server, error) {
 	logger.Info("Creating new server")
-	pm, err := partitionmanager.New(partitionNames, minioAddress, logger)
+	pm, err := partitionmanager.New(partitionNames, minioAddress, s3AccessKey, s3SecretAccessKey, logger)
 	if err != nil {
 		return nil, fmt.Errorf("error trying to create partition manager: %v", err)
 	}

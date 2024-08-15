@@ -14,9 +14,9 @@ import (
 	"go.uber.org/zap"
 )
 
-var lFlag = flag.String("l", "", "local address")
-
 var nFlag = flag.Int("n", 0, "number clients")
+var aFlag = flag.String("a", "minioadmin", "access key for s3")
+var sFlag = flag.String("s", "minioadmin", "secret access key for s3")
 
 const partitionName = "testpartition"
 
@@ -59,7 +59,6 @@ func runExperiment(n int) {
 	}()
 	flag.Parse()
 	fmt.Printf("Starting %d clients \n", n)
-	fmt.Printf("Using local address %s \n", *lFlag)
 	resultsChan := make(chan result)
 	for i := 0; i < n; i++ {
 		go runClient(i, warmUp, measuring, coolDown, resultsChan)
@@ -134,7 +133,7 @@ func runClient(clientNumber int, warmUp chan int, measuring chan int, coolDown c
 		fmt.Printf("Failed to create logger: %v \n", err)
 		os.Exit(1)
 	}
-	c, err := client.NewWithOptions("172.18.94.80:8080", "172.18.94.80:9000", *lFlag, logger)
+	c, err := client.NewWithOptions("172.18.94.80:8080", "172.18.94.80:9000", *aFlag, *sFlag, "", logger)
 	if err != nil {
 		logger.Fatal("Failed to create client", zap.Error(err))
 	}

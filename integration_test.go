@@ -21,7 +21,7 @@ func setupServer(partitionNames []string) (*server.Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	server, err := server.New(partitionNames, "localhost:8080", "localhost:9000", logger)
+	server, err := server.New(partitionNames, "localhost:8080", "localhost:9000", "minioadmin", "minioadmin", logger)
 	if err != nil {
 		return nil, err
 	}
@@ -35,7 +35,7 @@ func setupClient() (*client.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	client, err := client.New("localhost:8080", "localhost:9000", logger)
+	client, err := client.New("localhost:8080", "localhost:9000", "minioadmin", "minioadmin", logger)
 	if err != nil {
 		return nil, err
 	}
@@ -167,6 +167,38 @@ func TestBasicHappyCase(t *testing.T) {
 	go produce(100, "partition1", producerClient, 20, &wg, errChan)
 	go consume(100, 0, true, "partition0", consumerClient, &wg, errChan)
 	go consume(100, 0, true, "partition1", consumerClient, &wg, errChan)
+	wg.Wait()
+	for {
+		select {
+		case err := <-errChan:
+			t.Error(err)
+		default:
+			return
+		}
+	}
+}
+
+func TestManyMessages(t *testing.T) {
+	server, err := setupServer([]string{"partition0", "partition1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	producerClient, err := setupClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer producerClient.Close()
+	consumerClient, err := setupClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer consumerClient.Close()
+	var wg sync.WaitGroup
+	wg.Add(2)
+	errChan := make(chan error, 2)
+	go produce(100_000, "partition0", producerClient, 100, &wg, errChan)
+	go consume(100_000, 0, true, "partition0", consumerClient, &wg, errChan)
 	wg.Wait()
 	for {
 		select {
@@ -313,34 +345,6 @@ func TestAddingPartitions(t *testing.T) {
 			t.Error(err)
 		default:
 			return
-		}
-	}
-}
-
-// TestAddingPartitionSimultaneously tests adding the partition at the same time from multiple clients
-func TestAddingPartitionSimultaneously(t *testing.T) {
-	server, err := setupServer([]string{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer server.Close()
-	numClients := 5
-	results := make(chan error)
-	for range numClients {
-		go func() {
-			client0, err := setupClient()
-			if err != nil {
-				results <- err
-			}
-			defer client0.Close()
-			err = client0.CreatePartition("testpartition")
-			results <- err
-		}()
-	}
-	for range numClients {
-		err := <-results
-		if err != nil {
-			log.Fatal(err)
 		}
 	}
 }

@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/lthiede/cartero/client"
 	"github.com/lthiede/cartero/partition"
 	"github.com/minio/minio-go/v7"
-	"github.com/minio/minio-go/v7/pkg/credentials"
 	"go.uber.org/zap"
 )
 
@@ -19,17 +19,8 @@ type PartitionManager struct {
 	quit                chan struct{}
 }
 
-func minioClient(address string) (*minio.Client, error) {
-	// Initialize minio client object.
-	options := &minio.Options{
-		Creds:  credentials.NewStaticV4("minioadmin", "minioadmin", ""),
-		Secure: false,
-	}
-	return minio.New(address, options)
-}
-
-func New(partitionNames []string, minioAddress string, logger *zap.Logger) (*PartitionManager, error) {
-	minioClient, err := minioClient(minioAddress)
+func New(partitionNames []string, minioAddress string, s3AccessKey string, s3SecretAccessKey string, logger *zap.Logger) (*PartitionManager, error) {
+	minioClient, err := client.MinioClient(minioAddress, s3AccessKey, s3SecretAccessKey, 1)
 	if err != nil {
 		return nil, fmt.Errorf("error trying to create minio client: %v", err)
 	}

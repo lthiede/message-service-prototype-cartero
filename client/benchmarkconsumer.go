@@ -68,12 +68,10 @@ func NewBenchmarkConsumer(bucketName string, endpoint, accessKey, secretAccessKe
 	for i := range benchmarkConsumer.objects {
 		benchmarkConsumer.objects[i] = &benchmarkObjectInDownload{}
 	}
-	benchmarkConsumer.logger.Info("Finding downloadable objects for benchmark")
-	benchmarkConsumer.findDownloadableObjectsBenchmark()
+	go benchmarkConsumer.findDownloadableObjectsBenchmark()
 	for range Concurrency {
 		go benchmarkConsumer.downloadObjectsBenchmark()
 	}
-	benchmarkConsumer.logger.Info("Finished creating download object routines")
 	return benchmarkConsumer, nil
 }
 
@@ -89,7 +87,6 @@ func (c *BenchmarkConsumer) findDownloadableObjectsBenchmark() {
 
 	bufferPosition := 0
 	for _, name := range objectNames {
-		c.logger.Info("Feeding minio object", zap.String("objectName", name))
 		c.downloadTasks <- downloadTask{
 			name:           name,
 			bufferPosition: bufferPosition,
@@ -150,7 +147,6 @@ func (c *BenchmarkConsumer) downloadObjectsBenchmark() {
 	latencies := make([]time.Duration, 0)
 	filesDownloaded := 0
 	var bytesDownloaded uint64
-	c.logger.Info("Start download loop")
 	for {
 		select {
 		case <-c.done:

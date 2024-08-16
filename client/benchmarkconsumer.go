@@ -73,6 +73,7 @@ func NewBenchmarkConsumer(bucketName string, endpoint, accessKey, secretAccessKe
 	for range Concurrency {
 		go benchmarkConsumer.downloadObjectsBenchmark()
 	}
+	benchmarkConsumer.logger.Info("Finished creating download object routines")
 	return benchmarkConsumer, nil
 }
 

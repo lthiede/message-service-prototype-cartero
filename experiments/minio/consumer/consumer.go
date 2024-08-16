@@ -190,6 +190,7 @@ func runClient(clientNumber int, concurrency int, warmUp chan int, measuring cha
 		os.Exit(1)
 	}
 	client.Concurrency = concurrency
+	logger.Info("", zap.Int("concurrency", client.Concurrency))
 	consumer, err := client.NewBenchmarkConsumer(*bFlag, *oFlag, *aFlag, *sFlag, logger)
 	if err != nil {
 		logger.Fatal("Failed to create ping pong client", zap.Error(err))

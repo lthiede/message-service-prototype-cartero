@@ -88,7 +88,7 @@ func (c *BenchmarkConsumer) findDownloadableObjectsBenchmark() {
 
 	bufferPosition := 0
 	for _, name := range objectNames {
-		c.logger.Info("Feeding minio object", zap.String("objectName", c.bucketName))
+		c.logger.Info("Feeding minio object", zap.String("objectName", name))
 		c.downloadTasks <- downloadTask{
 			name:           name,
 			bufferPosition: bufferPosition,

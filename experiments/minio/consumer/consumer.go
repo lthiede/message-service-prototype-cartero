@@ -28,6 +28,7 @@ var bFlag = flag.String("b", "testpartition", "bucket name")
 var oFlag = flag.String("o", "localhost:9000", "address of object storage (s3/minio)")
 var aFlag = flag.String("a", "minioadmin", "access key for s3")
 var sFlag = flag.String("s", "minioadmin", "secret access key for s3")
+var mFlag = flag.String("m", "30s", "measuring period")
 
 func (n *intSlice) String() string {
 	return fmt.Sprintf("%v", []int(*n))
@@ -43,12 +44,9 @@ func (n *intSlice) Set(value string) error {
 }
 
 const WarmUpPeriod = 10 * time.Second
-const MeasuringPeriod = 10 * time.Hour
 const CoolDownPeriod = 10 * time.Second
 
-// const WarmUpPeriod = 20 * time.Hour
-// const MeasuringPeriod = 60 * time.Hour
-// const CoolDownPeriod = 20 * time.Hour
+var MeasuringPeriod time.Duration
 
 type consumeExperimentResult struct {
 	bpsDownloaded float64
@@ -70,7 +68,13 @@ func main() {
 	flag.Var(&nFlag, "n", "number clients")
 	flag.Var(&cFlag, "c", "concurrent downloads per client")
 	flag.Parse()
-	fileName := "consumer_minio"
+	fileName := "results_s3_consumer"
+	var err error
+	MeasuringPeriod, err = time.ParseDuration(*mFlag)
+	if err != nil {
+		log.Println(err.Error())
+		return
+	}
 	file, err := os.Create(fileName)
 	if err != nil {
 		log.Println(err.Error())

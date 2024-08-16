@@ -226,7 +226,7 @@ func (c *BenchmarkConsumer) NextObject() error {
 			timeSlept += 10 * time.Microsecond
 		}
 	}
-	c.logger.Info("Read object")
+	// c.logger.Info("Read object")
 	benchmarkObject.read = true
 	c.CollectMetricsLock.RLock()
 	if c.CollectMetrics {

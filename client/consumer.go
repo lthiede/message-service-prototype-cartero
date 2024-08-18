@@ -345,7 +345,7 @@ func (c *Consumer) nextBatch() error {
 
 // consumeNext returns the next available message regardless of c.nextOffsetToReturn
 func (c *Consumer) consumeNext() ([]byte, error) {
-	for c.currentBatch == nil || len(c.currentBatch) == 0 {
+	for len(c.currentBatch) == 0 {
 		err := c.nextBatch()
 		if err == ErrTimeout {
 			return nil, err

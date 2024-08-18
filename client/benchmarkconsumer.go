@@ -35,10 +35,9 @@ type downloadTask struct {
 }
 
 type benchmarkObjectInDownload struct {
-	downloaded bool
-	read       bool
-	size       int64
-	lock       sync.Mutex
+	size             int64
+	readLock         sync.Mutex
+	changeObjectLock sync.Mutex
 }
 
 type MinioMetrics struct {
@@ -66,7 +65,9 @@ func NewBenchmarkConsumer(bucketName string, endpoint, accessKey, secretAccessKe
 		logger:                logger,
 	}
 	for i := range benchmarkConsumer.objects {
-		benchmarkConsumer.objects[i] = &benchmarkObjectInDownload{}
+		object := &benchmarkObjectInDownload{}
+		object.readLock.Lock()
+		benchmarkConsumer.objects[i] = object
 	}
 	go benchmarkConsumer.findDownloadableObjectsBenchmark()
 	for range Concurrency {
@@ -87,6 +88,8 @@ func (c *BenchmarkConsumer) findDownloadableObjectsBenchmark() {
 
 	bufferPosition := 0
 	for _, name := range objectNames {
+		object := c.objects[bufferPosition]
+		object.changeObjectLock.Lock()
 		c.downloadTasks <- downloadTask{
 			name:           name,
 			bufferPosition: bufferPosition,
@@ -105,16 +108,7 @@ func (c *BenchmarkConsumer) findDownloadableObjectsBenchmark() {
 			}
 			current := objectNames[index]
 			objectInDownload := c.objects[bufferPosition]
-			objectInDownload.lock.Lock()
-			for !objectInDownload.read {
-				objectInDownload.lock.Unlock()
-				time.Sleep(10 * time.Millisecond)
-				objectInDownload.lock.Lock()
-			}
-			objectInDownload.read = false
-			objectInDownload.downloaded = false
-			objectInDownload.lock.Unlock()
-
+			objectInDownload.changeObjectLock.Lock()
 			c.downloadTasks <- downloadTask{
 				name:           current,
 				bufferPosition: bufferPosition,
@@ -176,10 +170,8 @@ func (c *BenchmarkConsumer) downloadObjectsBenchmark() {
 					filesDownloaded++
 				}
 				c.CollectMetricsLock.RUnlock()
-				benchmarkObjectInDownload.lock.Lock()
-				benchmarkObjectInDownload.downloaded = true
 				benchmarkObjectInDownload.size = 0
-				benchmarkObjectInDownload.lock.Unlock()
+				benchmarkObjectInDownload.readLock.Unlock()
 				continue
 			}
 			fbr := &firstByteRecorder{
@@ -201,40 +193,23 @@ func (c *BenchmarkConsumer) downloadObjectsBenchmark() {
 				bytesDownloaded += uint64(stats.Size)
 			}
 			c.CollectMetricsLock.RUnlock()
-			benchmarkObjectInDownload.lock.Lock()
-			benchmarkObjectInDownload.downloaded = true
 			benchmarkObjectInDownload.size = n
-			benchmarkObjectInDownload.lock.Unlock()
+			benchmarkObjectInDownload.readLock.Unlock()
 		}
 	}
 }
 
 func (c *BenchmarkConsumer) NextObject() error {
-	timeSlept := 0 * time.Microsecond
 	benchmarkObject := c.objects[c.nextObjectBufferPosition]
-	for {
-		benchmarkObject.lock.Lock()
-		if benchmarkObject.downloaded {
-			break
-		} else {
-			benchmarkObject.lock.Unlock()
-			if timeSlept >= Timeout {
-				c.logger.Error("Waiting for next object timed out")
-				return ErrTimeout
-			}
-			time.Sleep(10 * time.Microsecond)
-			timeSlept += 10 * time.Microsecond
-		}
-	}
+	benchmarkObject.readLock.Lock()
 	// c.logger.Info("Read object")
-	benchmarkObject.read = true
 	c.CollectMetricsLock.RLock()
 	if c.CollectMetrics {
 		c.bytesConsumed += uint64(benchmarkObject.size)
 		c.filesConsumed++
 	}
 	c.CollectMetricsLock.RUnlock()
-	benchmarkObject.lock.Unlock()
+	benchmarkObject.changeObjectLock.Unlock()
 	return nil
 }
 

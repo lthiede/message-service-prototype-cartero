@@ -36,6 +36,7 @@ type downloadTask struct {
 
 type benchmarkObjectInDownload struct {
 	size             int64
+	name             string
 	readLock         sync.Mutex
 	changeObjectLock sync.Mutex
 }
@@ -152,6 +153,7 @@ func (c *BenchmarkConsumer) downloadObjectsBenchmark() {
 			return
 		case downloadTask := <-c.downloadTasks:
 			benchmarkObjectInDownload := c.objects[downloadTask.bufferPosition]
+			benchmarkObjectInDownload.name = downloadTask.name
 			c.logger.Info("Starting download of new object", zap.String("objectName", downloadTask.name), zap.Int("bufferPosition", downloadTask.bufferPosition))
 			object, err := c.objectStorageClient.GetObject(context.TODO(), c.bucketName, downloadTask.name, minio.GetObjectOptions{})
 			if err != nil {
@@ -195,14 +197,16 @@ func (c *BenchmarkConsumer) downloadObjectsBenchmark() {
 			c.CollectMetricsLock.RUnlock()
 			benchmarkObjectInDownload.size = n
 			benchmarkObjectInDownload.readLock.Unlock()
+			c.logger.Info("Unlocked read lock", zap.Int("bufferPosition", downloadTask.bufferPosition), zap.String("name", downloadTask.name))
 		}
 	}
 }
 
 func (c *BenchmarkConsumer) NextObject() error {
 	benchmarkObject := c.objects[c.nextObjectBufferPosition]
+	c.logger.Info("Waiting to read object", zap.Int("bufferPosition", c.nextObjectBufferPosition))
 	benchmarkObject.readLock.Lock()
-	// c.logger.Info("Read object")
+	c.logger.Info("Read object", zap.String("name", benchmarkObject.name))
 	c.CollectMetricsLock.RLock()
 	if c.CollectMetrics {
 		c.bytesConsumed += uint64(benchmarkObject.size)

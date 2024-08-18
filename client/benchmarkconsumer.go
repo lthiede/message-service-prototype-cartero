@@ -206,7 +206,7 @@ func (c *BenchmarkConsumer) NextObject() error {
 	benchmarkObject := c.objects[c.nextObjectBufferPosition]
 	c.logger.Info("Waiting to read object", zap.Int("bufferPosition", c.nextObjectBufferPosition))
 	benchmarkObject.readLock.Lock()
-	c.logger.Info("Read object", zap.String("name", benchmarkObject.name))
+	c.logger.Info("Read object", zap.String("name", benchmarkObject.name), zap.Int("bufferPosition", c.nextObjectBufferPosition))
 	c.CollectMetricsLock.RLock()
 	if c.CollectMetrics {
 		c.bytesConsumed += uint64(benchmarkObject.size)
@@ -214,6 +214,7 @@ func (c *BenchmarkConsumer) NextObject() error {
 	}
 	c.CollectMetricsLock.RUnlock()
 	benchmarkObject.changeObjectLock.Unlock()
+	c.nextObjectBufferPosition = (c.nextObjectBufferPosition + 1) % Concurrency
 	return nil
 }
 

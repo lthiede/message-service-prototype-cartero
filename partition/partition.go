@@ -6,6 +6,9 @@ import (
 	"sync/atomic"
 
 	pb "github.com/lthiede/cartero/proto"
+
+	logclient "github.com/toziegler/rust-segmentstore/libsls-bindings/go_example/client"
+
 	"github.com/minio/minio-go/v7"
 	"go.uber.org/zap"
 )
@@ -53,6 +56,7 @@ func New(name string, objectStorageClient *minio.Client, logger *zap.Logger) (*P
 		quit:             make(chan int),
 		logger:           logger,
 	}
+	logclient.New([]string{"127.0.0.1:50000"}, logclient.MaxOutstanding, logclient.UringEntries, logclient.UringFlagNoSingleIssuer)
 	go p.handleProduce()
 	go p.handlePingPong()
 	return p, nil

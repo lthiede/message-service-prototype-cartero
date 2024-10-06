@@ -1,8 +1,6 @@
 module github.com/lthiede/cartero
 
-go 1.22
-
-toolchain go1.22.3
+go 1.23.1
 
 require (
 	github.com/minio/minio-go/v7 v7.0.72
@@ -30,6 +28,7 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/rjeczalik/notify v0.9.3 // indirect
 	github.com/rs/xid v1.5.0 // indirect
+	github.com/toziegler/rust-segmentstore v0.0.0-20241004144529-9d8087716ff0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/crypto v0.23.0 // indirect
 	golang.org/x/net v0.25.0 // indirect

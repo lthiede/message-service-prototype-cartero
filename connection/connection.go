@@ -43,6 +43,8 @@ func New(conn net.Conn, partitionManager *partitionmanager.PartitionManager, log
 	return c, nil
 }
 
+const payloadLength = 3797
+
 func (c *Connection) handleRequests() {
 	for {
 		select {
@@ -60,7 +62,6 @@ func (c *Connection) handleRequests() {
 			switch req := request.Request.(type) {
 			case *pb.Request_ProduceRequest:
 				produceReq := req.ProduceRequest
-				c.logger.Info("Produce request", zap.String("partitionName", produceReq.PartitionName), zap.Uint64("batchId", produceReq.BatchId))
 				p, ok := c.partitionCache[produceReq.PartitionName]
 				if !ok {
 					p, err = c.partitionManager.GetPartition(produceReq.PartitionName)
@@ -75,34 +76,26 @@ func (c *Connection) handleRequests() {
 					delete(c.partitionCache, produceReq.PartitionName)
 					c.logger.Error("Produce request to dead partition", zap.String("partitionName", produceReq.PartitionName), zap.Uint64("batchId", produceReq.BatchId))
 				} else {
-					p.ProduceRequests <- partition.ProduceRequest{
-						BatchId:         produceReq.BatchId,
-						Messages:        produceReq.Messages,
-						ProduceResponse: c.responses,
+					p.LogInteractionTask <- partition.LogInteractionTask{
+						ProduceRequest: &partition.ProduceRequest{
+							BatchId:         produceReq.BatchId,
+							Messages:        produceReq.Messages,
+							ProduceResponse: c.responses,
+						},
 					}
 				}
 				p.AliveLock.RUnlock()
-			case *pb.Request_PingPongRequest:
-				pingPongReq := req.PingPongRequest
-				p, ok := c.partitionCache[pingPongReq.PartitionName]
-				if !ok {
-					p, err = c.partitionManager.GetPartition(pingPongReq.PartitionName)
-					if err != nil {
-						c.logger.Error("Error getting partition", zap.Error(err))
-						continue
-					}
-					c.partitionCache[pingPongReq.PartitionName] = p
-				}
-				p.AliveLock.RLock()
-				if !p.Alive {
-					delete(c.partitionCache, pingPongReq.PartitionName)
-					c.logger.Error("Ping pong request to dead partition", zap.String("partitionName", pingPongReq.PartitionName))
-				} else {
-					p.PingPongRequests <- partition.PingPongRequest{
-						PingPongResponse: c.responses,
-					}
-				}
-				p.AliveLock.RUnlock()
+				// c.responses <- &pb.Response{
+				// 	Response: &pb.Response_ProduceAck{
+				// 		ProduceAck: &pb.ProduceAck{
+				// 			BatchId:       produceReq.BatchId,
+				// 			PartitionName: produceReq.PartitionName,
+				// 			Lsn:           lsn,
+				// 			NumMessages:   uint32(len(produceReq.Messages.Messages)),
+				// 		},
+				// 	},
+				// }
+				// lsn++
 			case *pb.Request_ConsumeRequest:
 				consumeReq := req.ConsumeRequest
 				p, ok := c.partitionCache[consumeReq.PartitionName]
@@ -115,7 +108,7 @@ func (c *Connection) handleRequests() {
 				}
 				pc, ok := c.partitionConsumers[consumeReq.PartitionName]
 				if !ok {
-					newPc, err := consume.NewPartitionConsumer(p, c.SendResponse, consumeReq.StartOffset, int(consumeReq.MinNumMessages), c.logger)
+					newPc, err := consume.NewPartitionConsumer(p, c.SendResponse, consumeReq.StartLsn, int(consumeReq.MinNumMessages), c.logger)
 					if err != nil {
 						c.logger.Error("Failed to register consumer", zap.String("partitionName", consumeReq.PartitionName))
 						continue
@@ -123,29 +116,8 @@ func (c *Connection) handleRequests() {
 					c.partitionConsumers[consumeReq.PartitionName] = newPc
 					c.logger.Info("Registered partition consumer", zap.String("partitionName", consumeReq.PartitionName))
 				} else {
-					pc.UpdateConsumption(consumeReq.StartOffset, int(consumeReq.MinNumMessages))
+					pc.UpdateConsumption(consumeReq.StartLsn, int(consumeReq.MinNumMessages))
 				}
-			case *pb.Request_LogConsumeRequest:
-				logConsumeReq := req.LogConsumeRequest
-				p, ok := c.partitionCache[logConsumeReq.PartitionName]
-				if !ok {
-					p, err = c.partitionManager.GetPartition(logConsumeReq.PartitionName)
-					if err != nil {
-						c.logger.Error("Error getting partition", zap.Error(err))
-						continue
-					}
-				}
-				objectNames := p.S3ObjectNames(logConsumeReq.StartOffset, logConsumeReq.EndOffsetExclusively)
-				response := &pb.Response{
-					Response: &pb.Response_LogConsumeResponse{
-						LogConsumeResponse: &pb.LogConsumeResponse{
-							RedirectS3:    true,
-							PartitionName: logConsumeReq.PartitionName,
-							ObjectNames:   objectNames,
-						},
-					},
-				}
-				c.SendResponse(response)
 			case *pb.Request_CreatePartitionRequest:
 				createPartitionRequest := req.CreatePartitionRequest
 				err := c.partitionManager.CreatePartition(createPartitionRequest.PartitionName)

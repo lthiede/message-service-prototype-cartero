@@ -11,15 +11,15 @@ import (
 const checkForNewLatency = 100 * time.Millisecond
 
 type update struct {
-	startOffset    uint64
+	startLSN       uint64
 	minNumMessages int
 }
 
 type PartitionConsumer struct {
 	p              *partition.Partition
 	sendResponse   func(*pb.Response)
-	startOffset    uint64
-	nextOffset     uint64
+	startLSN       uint64
+	nextLSN        uint64
 	minNumMessages int
 	logger         *zap.Logger
 	update         chan update
@@ -27,26 +27,26 @@ type PartitionConsumer struct {
 	quit           chan struct{}
 }
 
-func NewPartitionConsumer(p *partition.Partition, sendResponse func(*pb.Response), startOffset uint64, minNumMessages int, logger *zap.Logger) (*PartitionConsumer, error) {
+func NewPartitionConsumer(p *partition.Partition, sendResponse func(*pb.Response), startLSN uint64, minNumMessages int, logger *zap.Logger) (*PartitionConsumer, error) {
 	pc := &PartitionConsumer{
 		p:              p,
 		sendResponse:   sendResponse,
-		startOffset:    startOffset,
+		startLSN:       startLSN,
 		minNumMessages: minNumMessages,
 		logger:         logger,
 		update:         make(chan update),
 		checkForNew:    make(chan struct{}),
 		quit:           make(chan struct{}),
 	}
-	logger.Info("Adding partition consumer", zap.String("partitionName", p.Name), zap.Uint64("startOffset", startOffset))
+	logger.Info("Adding partition consumer", zap.String("partitionName", p.Name), zap.Uint64("startLSN", startLSN))
 	go pc.handleConsume()
 	return pc, nil
 }
 
-func (pc *PartitionConsumer) UpdateConsumption(startOffset uint64, minNumMessages int) {
-	pc.logger.Info("Updating partition consumer", zap.String("partitionName", pc.p.Name), zap.Uint64("startOffset", startOffset), zap.Int("minNumMessages", minNumMessages))
+func (pc *PartitionConsumer) UpdateConsumption(startLSN uint64, minNumMessages int) {
+	pc.logger.Info("Updating partition consumer", zap.String("partitionName", pc.p.Name), zap.Uint64("startLSN", startLSN), zap.Int("minNumMessages", minNumMessages))
 	pc.update <- update{
-		startOffset:    startOffset,
+		startLSN:       startLSN,
 		minNumMessages: minNumMessages,
 	}
 }
@@ -59,18 +59,19 @@ func (pc *PartitionConsumer) handleConsume() {
 			pc.logger.Info("Stop handling consume")
 			return
 		case update := <-pc.update:
-			pc.startOffset = update.startOffset
+			pc.startLSN = update.startLSN
 			pc.minNumMessages = update.minNumMessages
 		case <-pc.checkForNew:
-			newNextOffset := pc.p.NextProduceOffset()
-			if newNextOffset < pc.startOffset {
+			// hallo
+			newNextLSN := pc.p.NextLSN()
+			if newNextLSN < pc.startLSN {
 				pc.logger.Info("Ignoring consume notification smaller than startOffset",
 					zap.String("partitionName", pc.p.Name),
-					zap.Uint64("newNextOffset", newNextOffset),
-					zap.Uint("startOffset", uint(pc.startOffset)))
+					zap.Uint64("newNextLSN", newNextLSN),
+					zap.Uint("startLSN", uint(pc.startLSN)))
 				continue
 			}
-			if newNextOffset == pc.nextOffset {
+			if newNextLSN == pc.nextLSN {
 				// pc.logger.Info("No new safe consume offset",
 				// 	zap.String("partitionName", pc.p.Name),
 				// 	zap.Uint64("newNextOffset", newNextOffset),
@@ -79,14 +80,14 @@ func (pc *PartitionConsumer) handleConsume() {
 			}
 			pc.logger.Info("Sending safe consume offset",
 				zap.String("partitionName", pc.p.Name),
-				zap.Uint64("newNextOffset", newNextOffset))
+				zap.Uint64("newNextLSN", newNextLSN))
 			pc.sendResponse(&pb.Response{
 				Response: &pb.Response_ConsumeResponse{
 					ConsumeResponse: &pb.ConsumeResponse{
-						EndOfSafeOffsetsExclusively: newNextOffset,
-						PartitionName:               pc.p.Name,
+						EndOfSafeLsnsExclusively: newNextLSN,
+						PartitionName:            pc.p.Name,
 					}}})
-			pc.nextOffset = newNextOffset
+			pc.nextLSN = newNextLSN
 		}
 	}
 }

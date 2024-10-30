@@ -5,23 +5,20 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Launch Package",
+            "name": "Launch Experiment",
             "type": "go",
             "request": "launch",
             "mode": "auto",
-            "program": "./experiments/minio/consumer",
-            "args": ["-n", "1", "-l"],
+            "program": "./experiments/produce_to_log/via_broker",
+            "args": ["-n", "1", "-o", "127.0.0.1:50000"]
         },
         {
-            "name": "Launch Remote",
+            "name": "Launch Server",
             "type": "go",
-            "request": "attach",
-            "mode": "remote",
-            "remotePath": "/home/ec2-user/consumer",
-            "port": 2345,
-            "host": "localhost",
-            "cwd": "${workspaceFolder}",
-            "trace": "verbose"
+            "request": "launch",
+            "mode": "auto",
+            "program": "./cmd/server",
+            "args": ["-o", "127.0.0.1:50000"]
         }
     ]
 }

@@ -5,39 +5,32 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/lthiede/cartero/client"
 	"github.com/lthiede/cartero/partition"
-	"github.com/minio/minio-go/v7"
 	"go.uber.org/zap"
 )
 
 type PartitionManager struct {
-	rwMutex             sync.RWMutex
-	partitions          map[string]*partition.Partition
-	objectStorageClient *minio.Client
-	logger              *zap.Logger
-	quit                chan struct{}
+	rwMutex      sync.RWMutex
+	partitions   map[string]*partition.Partition
+	logAddresses []string
+	logger       *zap.Logger
+	quit         chan struct{}
 }
 
-func New(partitionNames []string, minioAddress string, s3AccessKey string, s3SecretAccessKey string, logger *zap.Logger) (*PartitionManager, error) {
-	minioClient, err := client.MinioClient(minioAddress, s3AccessKey, s3SecretAccessKey, 1)
-	if err != nil {
-		return nil, fmt.Errorf("error trying to create minio client: %v", err)
-	}
-	logger.Info("Created object storage client")
+func New(partitionNames []string, logAddresses []string, logger *zap.Logger) (*PartitionManager, error) {
 	partitions := map[string]*partition.Partition{}
 	for _, partitionName := range partitionNames {
-		p, err := partition.New(partitionName, minioClient, logger)
+		p, err := partition.New(partitionName, logAddresses, logger)
 		if err != nil {
 			return nil, fmt.Errorf("error creating partition %s: %v", partitionName, err)
 		}
 		partitions[partitionName] = p
 	}
 	pm := &PartitionManager{
-		partitions:          partitions,
-		objectStorageClient: minioClient,
-		logger:              logger,
-		quit:                make(chan struct{}),
+		partitions:   partitions,
+		logAddresses: logAddresses,
+		logger:       logger,
+		quit:         make(chan struct{}),
 	}
 	return pm, nil
 }
@@ -50,7 +43,7 @@ func (pm *PartitionManager) CreatePartition(partitionName string) error {
 		pm.logger.Warn("Tried to create partition that already existed", zap.String("partitionName", partitionName))
 		return nil
 	}
-	p, err := partition.New(partitionName, pm.objectStorageClient, pm.logger)
+	p, err := partition.New(partitionName, pm.logAddresses, pm.logger)
 	if err != nil {
 		return fmt.Errorf("error creating new partition: %v", err)
 	}

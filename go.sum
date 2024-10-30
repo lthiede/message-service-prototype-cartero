@@ -57,12 +57,6 @@ github.com/stretchr/testify v1.8.0/go.mod h1:yNjHg4UonilssWZ8iaSj1OCr/vHnekPRkoO
 github.com/stretchr/testify v1.8.4/go.mod h1:sz/lmYIOXD/1dqDmKjjqLyZ2RngseejIcXlSw2iwfAo=
 github.com/stretchr/testify v1.9.0 h1:HtqpIVDClZ4nwg75+f6Lvsy/wHu+3BoSGCbBAcpTsTg=
 github.com/stretchr/testify v1.9.0/go.mod h1:r2ic/lqez/lEtzL7wO/rwa5dbSLXVDPFyf8C91i36aY=
-github.com/toziegler/rust-segmentstore v0.0.0-20240919142000-8b3fa2150651 h1:MKzmw4RGB5xNd/lNrMjLsjqPluAZ+5y3ARz3orun8pc=
-github.com/toziegler/rust-segmentstore v0.0.0-20240919142000-8b3fa2150651/go.mod h1:fabLdHILpe2CHG50glOjQ5nwb01nXzw7QhiEVhisDJE=
-github.com/toziegler/rust-segmentstore v0.0.0-20240930153725-c2e17296ccfa h1:OIO4HZfgSL7PUSu1ssNTaTAlFt6QfuTTdw0yXYOcxZ8=
-github.com/toziegler/rust-segmentstore v0.0.0-20240930153725-c2e17296ccfa/go.mod h1:S/2BvzQ1pBvhO+/qH8gFdRMZohoqFnKvH8R+wDWFnB4=
-github.com/toziegler/rust-segmentstore v0.0.0-20241004133342-01a5916daeb2 h1:CQZLCCb4QVIKCFPtdj/0ZHYSBSgzMBJoDn6h5xianfo=
-github.com/toziegler/rust-segmentstore v0.0.0-20241004133342-01a5916daeb2/go.mod h1:S/2BvzQ1pBvhO+/qH8gFdRMZohoqFnKvH8R+wDWFnB4=
 github.com/toziegler/rust-segmentstore v0.0.0-20241004144529-9d8087716ff0 h1:MrpKisxmJsoxzEfs84pjUiuoXajj6S9Xcg2RILGVpS0=
 github.com/toziegler/rust-segmentstore v0.0.0-20241004144529-9d8087716ff0/go.mod h1:S/2BvzQ1pBvhO+/qH8gFdRMZohoqFnKvH8R+wDWFnB4=
 github.com/yuin/goldmark v1.4.13/go.mod h1:6yULJ656Px+3vBD8DxQVa3kxgyrAnzto9xy5taEt/CY=

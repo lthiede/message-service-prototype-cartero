@@ -2,17 +2,21 @@ package client
 
 import (
 	"bytes"
+	"fmt"
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	pb "github.com/lthiede/cartero/proto"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/encoding/protodelim"
+	"google.golang.org/protobuf/proto"
 )
 
-var MaxMessagesPerBatch = 10
-var MaxPublishDelay = 100 * time.Millisecond
+var MaxMessagesPerBatch = 1
+var MaxPublishDelay = 50 * time.Millisecond
+var MaxBatchSize = 3800
 
 type Producer struct {
 	client                *Client
@@ -20,10 +24,12 @@ type Producer struct {
 	logger                *zap.Logger
 	partitionName         string
 	messages              [][]byte
+	epoch                 int
+	lock                  sync.Mutex
 	batchId               uint64        // implicitly starts at 0
 	batchIdUnacknowledged atomic.Uint64 // implicitly starts at 0
+	lastLSNPlus1          atomic.Uint64 // implicitly starts at 0
 	numMessagesAck        atomic.Uint64 // implicitly starts at 0
-	Input                 chan []byte
 	Error                 chan ProduceError
 	Acks                  chan uint64
 	returnAcksOnChan      bool
@@ -48,10 +54,9 @@ func (client *Client) NewProducer(partitionName string, ReturnAcksOnChan bool) (
 	}
 	p = &Producer{
 		client:           client,
-		conn:             client.conn,
+		conn:             client.Conn,
 		logger:           client.logger,
 		partitionName:    partitionName,
-		Input:            make(chan []byte),
 		Error:            make(chan ProduceError),
 		Acks:             make(chan uint64),
 		returnAcksOnChan: ReturnAcksOnChan,
@@ -62,49 +67,65 @@ func (client *Client) NewProducer(partitionName string, ReturnAcksOnChan bool) (
 	}
 	client.producers[partitionName] = p
 	client.producersRWMutex.Unlock()
-	go p.handleInput()
 	return p, nil
 }
 
-func (p *Producer) handleInput() {
-	p.logger.Info("Start handling production of batches", zap.String("partitionName", p.partitionName))
-	maxPublishDelayEpoch := 0
-	maxPublishDelayTimer := make(chan int)
-	for {
-		select {
-		case message := <-p.Input:
-			p.messages = append(p.messages, message)
-			if len(p.messages) == 1 && MaxMessagesPerBatch > 1 {
-				go func(epoch int) {
-					time.Sleep(MaxPublishDelay)
-					maxPublishDelayTimer <- epoch
-				}(maxPublishDelayEpoch)
+func (p *Producer) AddBatch(message []byte) error {
+	if p.onlyMessageBatchSize(message) > MaxBatchSize {
+		return fmt.Errorf("to many bytes in message, max number of bytes is %d", MaxBatchSize)
+	}
+	p.lock.Lock()
+	defer p.lock.Unlock()
+	if p.addedMessageBatchSize(message) > MaxBatchSize {
+		err := p.sendBatch()
+		if err != nil {
+			return fmt.Errorf("failed to send batch: %v", err)
+		}
+		p.epoch++
+	}
+	p.messages = append(p.messages, message)
+	if len(p.messages) == 1 && MaxMessagesPerBatch > 1 {
+		p.scheduleSend(p.epoch)
+	}
+	if len(p.messages) < MaxMessagesPerBatch {
+		return nil
+	}
+	err := p.sendBatch()
+	if err != nil {
+		return fmt.Errorf("failed to send batch: %v", err)
+	}
+	p.epoch++
+	return nil
+}
+
+func (p *Producer) scheduleSend(epoch int) {
+	time.Sleep(MaxPublishDelay)
+	p.lock.Lock()
+	defer p.lock.Unlock()
+	if p.epoch == epoch {
+		err := p.sendBatch()
+		if err != nil {
+			p.Error <- ProduceError{
+				Messages: p.messages,
+				Err:      fmt.Errorf("failed to send batch: %v", err),
 			}
-			if len(p.messages) < MaxMessagesPerBatch {
-				continue
-			}
-			p.logger.Info("MaxMessagesPerBatch reached", zap.String("partitionName", p.partitionName), zap.Int("MaxMessagesPerBatch", MaxMessagesPerBatch))
-			p.sendBatch()
-			p.messages = nil
-			maxPublishDelayEpoch++
-		case maxPublishDelayReached := <-maxPublishDelayTimer:
-			if maxPublishDelayReached < maxPublishDelayEpoch {
-				continue
-			}
-			p.logger.Info("MaxPublishDelay reached",
-				zap.String("partitionName", p.partitionName),
-				zap.Int("MaxPublishDelay",
-					int(MaxPublishDelay.Milliseconds())))
-			p.sendBatch()
-			p.messages = nil
-		case <-p.done:
-			p.logger.Info("Stop handling production of batches", zap.String("partitionName", p.partitionName))
-			return
 		}
 	}
 }
 
-func (p *Producer) sendBatch() {
+func (p *Producer) onlyMessageBatchSize(newMessage []byte) int {
+	return proto.Size(&pb.Messages{
+		Messages: [][]byte{newMessage},
+	})
+}
+
+func (p *Producer) addedMessageBatchSize(newMessage []byte) int {
+	return proto.Size(&pb.Messages{
+		Messages: append(p.messages, newMessage),
+	})
+}
+
+func (p *Producer) sendBatch() error {
 	req := &pb.Request{
 		Request: &pb.Request_ProduceRequest{
 			ProduceRequest: &pb.ProduceRequest{
@@ -114,32 +135,24 @@ func (p *Producer) sendBatch() {
 			},
 		},
 	}
-	p.logger.Info("Sending batch", zap.Uint64("batchId", p.batchId), zap.String("partitionName", p.partitionName))
 	wireMessage := &bytes.Buffer{}
 	_, err := protodelim.MarshalTo(wireMessage, req)
 	if err != nil {
-		p.logger.Error("Failed to marshal batch", zap.Uint64("batchId", p.batchId), zap.String("partitionName", p.partitionName), zap.Error(err))
-		p.Error <- ProduceError{
-			Err:      err,
-			Messages: p.messages,
-		}
-		return
+		return fmt.Errorf("failed to marshal batch: %v", err)
 	}
 	_, err = p.conn.Write(wireMessage.Bytes())
 	if err != nil {
-		p.logger.Error("Failed to send batch", zap.Uint64("batchId", p.batchId), zap.String("partitionName", p.partitionName), zap.Error(err))
-		p.Error <- ProduceError{
-			Err:      err,
-			Messages: p.messages,
-		}
-		return
+		return fmt.Errorf("failed to send bytes over wire: %v", err)
 	}
 	p.batchId++
+	p.messages = nil
+	return nil
 }
 
-func (p *Producer) UpdateAcknowledged(batchId uint64, numMessages uint64) {
-	p.batchIdUnacknowledged.Store(batchId + 1)
-	newNumMessagesAck := p.numMessagesAck.Load() + numMessages
+func (p *Producer) UpdateAcknowledged(ack *pb.ProduceAck) {
+	p.batchIdUnacknowledged.Store(ack.BatchId + 1)
+	p.lastLSNPlus1.Store(ack.Lsn + 1)
+	newNumMessagesAck := p.numMessagesAck.Load() + uint64(ack.NumMessages)
 	p.numMessagesAck.Store(newNumMessagesAck)
 	// this can block the main loop for receiving messages
 	if p.returnAcksOnChan {
@@ -153,6 +166,10 @@ func (p *Producer) NumMessagesAck() uint64 {
 
 func (p *Producer) BatchIdAck() uint64 {
 	return p.batchIdUnacknowledged.Load() - 1
+}
+
+func (p *Producer) LastLSNPlus1() uint64 {
+	return p.lastLSNPlus1.Load()
 }
 
 func (p *Producer) Close() error {

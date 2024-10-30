@@ -1,0 +1,133 @@
+package main
+
+import (
+	"crypto/rand"
+	"flag"
+	"fmt"
+	"log"
+	"time"
+
+	logclient "github.com/toziegler/rust-segmentstore/libsls-bindings/go_example/client"
+)
+
+const payloadLength = 3797
+const warmupDuration = 5 * time.Second
+const experimentDuration = 15 * time.Second
+
+type stringSlice []string
+
+var logAddressFlag stringSlice
+var nFlag = flag.Int("n", 1, "number of concurrent clients")
+
+func (n *stringSlice) String() string {
+	return fmt.Sprintf("%v", []string(*n))
+}
+
+func (n *stringSlice) Set(value string) error {
+	*n = append(*n, value)
+	return nil
+}
+
+// 1 clients sent 1080608 messages in 15 seconds; message rate 72040 msg/s; bw 273754026 B/s
+// 2 clients sent 1030281 messages in 15 seconds; message rate 68685 msg/s; bw 261004520 B/s
+func main() {
+	flag.Var(&logAddressFlag, "o", "addresses of log nodes")
+	flag.Parse()
+	returnChans := make([]chan uint64, 0, *nFlag)
+	for range *nFlag {
+		returnChans = append(returnChans, make(chan uint64))
+	}
+	for _, r := range returnChans {
+		go experiment(r)
+	}
+	var messagesSentTotal uint64
+	for _, r := range returnChans {
+		messagesSent, ok := <-r
+		if !ok {
+			fmt.Println("One client wasn't successful")
+			return
+		}
+		messagesSentTotal += messagesSent
+	}
+	fmt.Printf("%d clients sent %d messages in %d seconds; message rate %d msg/s; bw %d B/s\n",
+		*nFlag,
+		messagesSentTotal,
+		uint64(experimentDuration.Seconds()),
+		messagesSentTotal/uint64(experimentDuration.Seconds()),
+		messagesSentTotal*payloadLength/uint64(experimentDuration.Seconds()))
+}
+
+func experiment(messagesSent chan<- uint64) {
+	payload := make([]byte, payloadLength)
+	rand.Read(payload)
+	logClient, err := logclient.New(logAddressFlag,
+		logclient.MaxOutstanding,
+		logclient.UringEntries,
+		logclient.UringFlagNoSingleIssuer)
+	if err != nil {
+		log.Printf("error creating log client: %v\n", err)
+		close(messagesSent)
+		return
+	}
+	err = logClient.Connect()
+	if err != nil {
+		log.Printf("error connecting to log nodes: %v", err)
+		close(messagesSent)
+		return
+	}
+	log.Println("Starting warmup")
+	warmupFinished := timer(warmupDuration)
+warmup:
+	for {
+		select {
+		case <-warmupFinished:
+			break warmup
+		default:
+			produce(payload, logClient)
+		}
+	}
+	startLsn, err := logClient.PollCompletion()
+	if err != nil {
+		log.Printf("error polling highest committed lsn after warmup: %v", err)
+		close(messagesSent)
+		return
+	}
+	log.Println("Starting measurements")
+	experimentFinished := timer(experimentDuration)
+experiment:
+	for {
+		select {
+		case <-experimentFinished:
+			break experiment
+		default:
+			produce(payload, logClient)
+		}
+	}
+	endLsn, err := logClient.PollCompletion()
+	if err != nil {
+		log.Printf("error polling highest committed lsn after experiment: %v", err)
+		close(messagesSent)
+		return
+	}
+	messagesSent <- endLsn - startLsn
+}
+
+func produce(payload []byte, client *logclient.ClientWrapper) error {
+	_, err := client.AppendAsync(payload)
+	if err != nil {
+		_, err := client.PollCompletion()
+		if err != nil {
+			return fmt.Errorf("failed to poll highest committed lsn: %v", err)
+		}
+	}
+	return nil
+}
+
+func timer(duration time.Duration) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		time.Sleep(duration)
+		close(done)
+	}()
+	return done
+}

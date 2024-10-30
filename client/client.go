@@ -21,12 +21,10 @@ import (
 
 type Client struct {
 	logger                     *zap.Logger
-	conn                       net.Conn
+	Conn                       net.Conn
 	producers                  map[string]*Producer
 	producersRWMutex           sync.RWMutex
-	pingPongs                  map[string]*PingPong
-	pingPongsRWMutex           sync.RWMutex
-	consumers                  map[string]GeneralConsumer
+	consumers                  map[string]*Consumer
 	consumersRWMutex           sync.RWMutex
 	expectedCreatePartitionRes map[string]chan bool
 	objectStorageClient        *minio.Client
@@ -111,10 +109,9 @@ func NewWithOptions(address string, minioAddress string, s3AccessKey string, s3S
 	logger.Info("Created object storage client")
 	client := &Client{
 		logger:                     logger,
-		conn:                       conn,
+		Conn:                       conn,
 		producers:                  map[string]*Producer{},
-		pingPongs:                  map[string]*PingPong{},
-		consumers:                  map[string]GeneralConsumer{},
+		consumers:                  map[string]*Consumer{},
 		expectedCreatePartitionRes: map[string]chan bool{},
 		minioAddress:               minioAddress,
 		objectStorageClient:        objectStorageClient,
@@ -122,11 +119,6 @@ func NewWithOptions(address string, minioAddress string, s3AccessKey string, s3S
 	}
 	go client.handleResponses()
 	return client, nil
-}
-
-type GeneralConsumer interface {
-	UpdateEndOfSafeOffsetsExclusively(endOfSafeOffsetsExclusively uint64)
-	FeedNewS3ObjectNames(s3ObjectNames []string)
 }
 
 func (c *Client) handleResponses() {
@@ -137,7 +129,7 @@ func (c *Client) handleResponses() {
 			return
 		default:
 			response := &pb.Response{}
-			err := protodelim.UnmarshalFrom(&readertobytereader.ReaderByteReader{Reader: c.conn}, response)
+			err := protodelim.UnmarshalFrom(&readertobytereader.ReaderByteReader{Reader: c.Conn}, response)
 			if err != nil {
 				c.logger.Error("Failed to unmarshal response", zap.Error(err))
 				return
@@ -151,19 +143,9 @@ func (c *Client) handleResponses() {
 					c.logger.Error("Partition not recognized", zap.String("partitionName", produceAck.PartitionName))
 					continue
 				}
-				c.logger.Info("Received ack", zap.Uint64("batchId", produceAck.BatchId), zap.Uint64("numberMessages", produceAck.EndOffset-produceAck.StartOffset))
-				p.UpdateAcknowledged(produceAck.BatchId, produceAck.EndOffset-produceAck.StartOffset)
+				c.logger.Info("Received ack", zap.Uint64("batchId", produceAck.BatchId), zap.Uint64("lsn", produceAck.Lsn))
+				p.UpdateAcknowledged(produceAck)
 				c.producersRWMutex.RUnlock()
-			case *pb.Response_PingPongResponse:
-				pingPongRes := res.PingPongResponse
-				c.pingPongsRWMutex.RLock()
-				pp, ok := c.pingPongs[pingPongRes.PartitionName]
-				if !ok {
-					c.logger.Error("Partition not recognized", zap.String("partitionName", pingPongRes.PartitionName))
-					continue
-				}
-				pp.Responses <- struct{}{}
-				c.pingPongsRWMutex.RUnlock()
 			case *pb.Response_ConsumeResponse:
 				consumeRes := res.ConsumeResponse
 				c.consumersRWMutex.RLock()
@@ -172,22 +154,8 @@ func (c *Client) handleResponses() {
 					c.logger.Error("Partition not recognized", zap.String("partitionName", consumeRes.PartitionName))
 					continue
 				}
-				c.logger.Info("Client received safe consume offset", zap.String("partitionName", consumeRes.PartitionName), zap.Int("offset", int(consumeRes.EndOfSafeOffsetsExclusively)))
-				cons.UpdateEndOfSafeOffsetsExclusively(consumeRes.EndOfSafeOffsetsExclusively)
-				c.consumersRWMutex.RUnlock()
-			case *pb.Response_LogConsumeResponse:
-				logConsumeRes := res.LogConsumeResponse
-				if !logConsumeRes.RedirectS3 {
-					c.logger.Error("Received log consume response that doesn't redirect to s3. This isn't supported yet", zap.String("partitionName", logConsumeRes.PartitionName))
-				}
-				c.consumersRWMutex.RLock()
-				cons, ok := c.consumers[logConsumeRes.PartitionName]
-				if !ok {
-					c.logger.Error("Partition not recognized", zap.String("partitionName", logConsumeRes.PartitionName))
-					continue
-				}
-				// c.logger.Info("Client received s3 objects to read", zap.String("partitionName", logConsumeRes.PartitionName), zap.Strings("s3Objects", logConsumeRes.ObjectNames))
-				cons.FeedNewS3ObjectNames(logConsumeRes.ObjectNames)
+				c.logger.Info("Client received safe consume offset", zap.String("partitionName", consumeRes.PartitionName), zap.Int("endOfSafeLSNsExclusively", int(consumeRes.EndOfSafeLsnsExclusively)))
+				cons.UpdateEndOfSafeLSNsExclusively(consumeRes.EndOfSafeLsnsExclusively)
 				c.consumersRWMutex.RUnlock()
 			case *pb.Response_CreatePartitionResponse:
 				createPartitionRes := res.CreatePartitionResponse
@@ -205,7 +173,7 @@ func (c *Client) handleResponses() {
 }
 
 func (c *Client) Close() error {
-	moreImportantErr := c.conn.Close()
+	moreImportantErr := c.Conn.Close()
 	if moreImportantErr != nil {
 		c.logger.Error("Failed to close connection", zap.Error(moreImportantErr))
 	}

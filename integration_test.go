@@ -1,10 +1,11 @@
 package cartero_test
 
 import (
-	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,6 +15,12 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
+type maxLSN struct {
+	lsns  []uint64
+	index atomic.Uint32
+	m     sync.RWMutex
+}
+
 func setupServer(partitionNames []string) (*server.Server, error) {
 	config := zap.NewDevelopmentConfig()
 	config.Level.SetLevel(zapcore.InfoLevel)
@@ -21,7 +28,7 @@ func setupServer(partitionNames []string) (*server.Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	server, err := server.New(partitionNames, "localhost:8080", "localhost:9000", "minioadmin", "minioadmin", logger)
+	server, err := server.New(partitionNames, "localhost:8080", []string{"127.0.0.1:50000"}, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -42,14 +49,12 @@ func setupClient() (*client.Client, error) {
 	return client, nil
 }
 
-func waitForAcks(expectedNumAck int, producer *client.Producer, timeout <-chan int) error {
+func waitForAcks(expectedNumAck int, producer *client.Producer) error {
 	for int(producer.NumMessagesAck()) < expectedNumAck {
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(time.Millisecond)
 		select {
 		case err := <-producer.Error:
 			return err.Err
-		case <-timeout:
-			return errors.New("Waiting for acks timed out")
 		default:
 			continue
 		}
@@ -57,7 +62,7 @@ func waitForAcks(expectedNumAck int, producer *client.Producer, timeout <-chan i
 	return nil
 }
 
-func produce(numberMessages int, partitionName string, client *client.Client, maxInFlight int, wg *sync.WaitGroup, errChan chan<- error) {
+func produce(numberMessages int, partitionName string, client *client.Client, maxInFlight int, outputLSN *maxLSN, wg *sync.WaitGroup, errChan chan<- error) {
 	producer, err := client.NewProducer(partitionName, false)
 	if err != nil {
 		errChan <- err
@@ -66,153 +71,68 @@ func produce(numberMessages int, partitionName string, client *client.Client, ma
 		return
 	}
 	defer producer.Close()
-	timeout := make(chan int)
-	go func() {
-		time.Sleep(20 * time.Second)
-		close(timeout)
-	}()
 	for numberProduced := 0; numberProduced < numberMessages; {
 		currentMessage := []byte(fmt.Sprintf("%s_%d", partitionName, numberProduced))
-		select {
-		case producer.Input <- currentMessage:
-			numberProduced++
-		case <-timeout:
-			errChan <- errors.New("Produce timed out")
-			wg.Done()
-			log.Println("Produce timed out")
-			return
-		}
-		err := waitForAcks(numberProduced-maxInFlight, producer, timeout)
+		producer.Input <- currentMessage
+		numberProduced++
+		err := waitForAcks(numberProduced-maxInFlight, producer)
 		if err != nil {
 			errChan <- err
 			wg.Done()
+			fmt.Printf("Err waiting for acks 1: %v\n", err)
 			return
 		}
 	}
-	err = waitForAcks(numberMessages, producer, timeout)
+	err = waitForAcks(numberMessages, producer)
 	if err != nil {
 		errChan <- err
 		wg.Done()
+		fmt.Printf("Err waiting for acks 2: %v\n", err)
 		return
 	}
+	log.Println("finished waiting for acks")
+	lastLSN := producer.LastLSNPlus1() - 1
+	index := outputLSN.index.Add(1) - 1
+	outputLSN.lsns[index] = lastLSN
+	if index == uint32(len(outputLSN.lsns)-1) {
+		outputLSN.m.Unlock()
+	}
 	wg.Done()
-	log.Println("Exiting naturally")
+	log.Println("Produce exiting naturally")
 }
 
-func waitForSafeOffset(startOffset uint64, expectedEndOfSafeOffsets uint64, inOrder bool, partitionName string, consumer *client.Consumer, timeout <-chan int) error {
-	for currentOffset := startOffset; currentOffset < expectedEndOfSafeOffsets; currentOffset++ {
-		message, err := consumer.Consume()
-		if err != nil {
-			return fmt.Errorf("error consuming: %v", err)
-		}
-		if inOrder {
-			expectedMessage := fmt.Sprintf("%s_%d", partitionName, currentOffset)
-			if string(message) != expectedMessage {
-				return fmt.Errorf("Client received message out of order expected %s but got %s", expectedMessage, string(message))
-			}
-		}
-		select {
-		case <-timeout:
-			return errors.New("waiting for safe consume offset timed out")
-		default:
-			continue
-		}
+func waitForLSN(expectedLSN uint64, consumer *client.Consumer) error {
+	for consumer.EndOfSafeLSNsExclusively() <= expectedLSN {
+		time.Sleep(10 * time.Second)
 	}
 	return nil
 }
 
-func consume(numberMessages int, startOffset uint64, inOrder bool, partitionName string, client *client.Client, wg *sync.WaitGroup, errChan chan<- error) {
-	consumer, err := client.NewConsumer(partitionName, uint64(startOffset))
+func consume(partitionName string, client *client.Client, inputLsn *maxLSN, wg *sync.WaitGroup, errChan chan<- error) {
+	consumer, err := client.NewConsumer(partitionName, 0)
 	if err != nil {
 		errChan <- err
 		wg.Done()
 		return
 	}
 	defer consumer.Close()
-	timeout := make(chan int)
-	go func() {
-		time.Sleep(20 * time.Second)
-		close(timeout)
-	}()
-	err = waitForSafeOffset(startOffset, startOffset+uint64(numberMessages), inOrder, partitionName, consumer, timeout)
+	inputLsn.m.RLock()
+	defer inputLsn.m.RUnlock()
+	expectedLSN := slices.Max(inputLsn.lsns)
+	err = waitForLSN(expectedLSN, consumer)
 	if err != nil {
 		errChan <- err
 		wg.Done()
 		return
 	}
 	wg.Done()
+	log.Println("Consume exiting naturally")
 }
 
-// TestBasicHappyCase tests a simple setup with two partitions with one consumer and one producer each
-func TestBasicHappyCase(t *testing.T) {
+// TestRustSegmentStore tests the integrating of the broker with the distributed log
+// the distributed log is currently restricted because it allows only writes
+func TestRustSegmentStore(t *testing.T) {
 	server, err := setupServer([]string{"partition0", "partition1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer server.Close()
-	producerClient, err := setupClient()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer producerClient.Close()
-	consumerClient, err := setupClient()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer consumerClient.Close()
-	var wg sync.WaitGroup
-	wg.Add(4)
-	errChan := make(chan error, 4)
-	go produce(100, "partition0", producerClient, 20, &wg, errChan)
-	go produce(100, "partition1", producerClient, 20, &wg, errChan)
-	go consume(100, 0, true, "partition0", consumerClient, &wg, errChan)
-	go consume(100, 0, true, "partition1", consumerClient, &wg, errChan)
-	wg.Wait()
-	for {
-		select {
-		case err := <-errChan:
-			t.Error(err)
-		default:
-			return
-		}
-	}
-}
-
-func TestManyMessages(t *testing.T) {
-	server, err := setupServer([]string{"partition0", "partition1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer server.Close()
-	producerClient, err := setupClient()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer producerClient.Close()
-	consumerClient, err := setupClient()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer consumerClient.Close()
-	var wg sync.WaitGroup
-	wg.Add(2)
-	errChan := make(chan error, 2)
-	go produce(100_000, "partition0", producerClient, 100, &wg, errChan)
-	go consume(100_000, 0, true, "partition0", consumerClient, &wg, errChan)
-	wg.Wait()
-	for {
-		select {
-		case err := <-errChan:
-			t.Error(err)
-		default:
-			return
-		}
-	}
-}
-
-// TestPubSub tests two producers producing on the same partition with two consumers each consuming all messages
-func TestPubSub(t *testing.T) {
-	server, err := setupServer([]string{"partition0"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,114 +150,14 @@ func TestPubSub(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(4)
 	errChan := make(chan error, 4)
-	go produce(100, "partition0", client0, 50, &wg, errChan)
-	go produce(100, "partition0", client1, 50, &wg, errChan)
-	go consume(200, 0, false, "partition0", client0, &wg, errChan)
-	go consume(200, 0, false, "partition0", client1, &wg, errChan)
-	wg.Wait()
-	for {
-		select {
-		case err := <-errChan:
-			t.Error(err)
-		default:
-			return
-		}
+	outputLSN := &maxLSN{
+		lsns: make([]uint64, 2),
 	}
-}
-
-// TestMaxPublishDelay tests publishing due to reaching the max publish delay before reaching the max number of messages in a batch
-func TestMaxPublishDelay(t *testing.T) {
-	server, err := setupServer([]string{"partition0"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer server.Close()
-	client0, err := setupClient()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer client0.Close()
-	client1, err := setupClient()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer client1.Close()
-	var wg sync.WaitGroup
-	wg.Add(2)
-	errChan := make(chan error, 2)
-	go produce(30, "partition0", client1, 5, &wg, errChan)
-	time.Sleep(10 * time.Second)
-	go consume(30, 0, true, "partition0", client0, &wg, errChan)
-	wg.Wait()
-	for {
-		select {
-		case err := <-errChan:
-			t.Error(err)
-		default:
-			return
-		}
-	}
-}
-
-// TestReadingFromStartOffset tests reading starting from a start offset > 0
-func TestReadingFromStartOffset(t *testing.T) {
-	server, err := setupServer([]string{"partition0"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer server.Close()
-	client0, err := setupClient()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer client0.Close()
-	client1, err := setupClient()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer client1.Close()
-	var wg sync.WaitGroup
-	wg.Add(2)
-	errChan := make(chan error, 2)
-	go produce(30, "partition0", client1, 7, &wg, errChan)
-	go consume(15, 15, true, "partition0", client0, &wg, errChan)
-	wg.Wait()
-	for {
-		select {
-		case err := <-errChan:
-			t.Error(err)
-		default:
-			return
-		}
-	}
-}
-
-// TestAddingPartitions tests adding partitions to the running server
-func TestAddingPartitions(t *testing.T) {
-	server, err := setupServer([]string{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer server.Close()
-	client0, err := setupClient()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer client0.Close()
-	client1, err := setupClient()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer client1.Close()
-	err = client0.CreatePartition("testpartition")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var wg sync.WaitGroup
-	wg.Add(2)
-	errChan := make(chan error, 2)
-	go produce(100, "testpartition", client0, 20, &wg, errChan)
-	go consume(100, 0, true, "testpartition", client1, &wg, errChan)
+	outputLSN.m.Lock()
+	go produce(10000, "partition0", client0, 50, outputLSN, &wg, errChan)
+	go produce(10000, "partition1", client1, 50, outputLSN, &wg, errChan)
+	go consume("partition1", client0, outputLSN, &wg, errChan)
+	go consume("partition0", client1, outputLSN, &wg, errChan)
 	wg.Wait()
 	for {
 		select {

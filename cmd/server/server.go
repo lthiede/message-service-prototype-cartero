@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -11,14 +12,24 @@ import (
 	"go.uber.org/zap"
 )
 
+type stringSlice []string
+
 // var cpuFlag = flag.Bool("c", false, "do cpu profiling")
 // var blockFlag = flag.Bool("b", false, "do block profiling")
 // var mutexFlag = flag.Bool("m", false, "do mutex profiling")
-var objectStorageAddressFlag = flag.String("o", "172.18.94.80:9000", "address of minio")
-var aFlag = flag.String("a", "minioadmin", "access key for s3")
-var sFlag = flag.String("s", "minioadmin", "secret access key for s3")
+var logAddressFlag stringSlice
+
+func (n *stringSlice) String() string {
+	return fmt.Sprintf("%v", []string(*n))
+}
+
+func (n *stringSlice) Set(value string) error {
+	*n = append(*n, value)
+	return nil
+}
 
 func main() {
+	flag.Var(&logAddressFlag, "o", "addresses of log nodes")
 	flag.Parse()
 	// if *cpuFlag {
 	// 	defer profile.Start(profile.CPUProfile).Stop()
@@ -36,8 +47,7 @@ func main() {
 		log.Panicf("Error creating logger: %v", err)
 	}
 	defer logger.Sync()
-	// server, err := server.New([]string{}, "172.18.94.70:8080", *objectStorageAddressFlag, logger)
-	server, err := server.New([]string{}, "localhost:8080", *objectStorageAddressFlag, *aFlag, *sFlag, logger)
+	server, err := server.New([]string{"partition0"}, "localhost:8080", logAddressFlag, logger)
 	if err != nil {
 		logger.Panic("Error creating server", zap.Error(err))
 	}

@@ -6,9 +6,10 @@ require (
 	github.com/minio/minio-go/v7 v7.0.72
 	github.com/minio/pkg/v2 v2.0.19
 	go.uber.org/zap v1.27.0
-	golang.org/x/text v0.15.0
 	google.golang.org/protobuf v1.34.1
 )
+
+require golang.org/x/text v0.15.0 // indirect
 
 require (
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.3.0 // indirect
@@ -28,7 +29,7 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/rjeczalik/notify v0.9.3 // indirect
 	github.com/rs/xid v1.5.0 // indirect
-	github.com/toziegler/rust-segmentstore v0.0.0-20241004144529-9d8087716ff0 // indirect
+	github.com/toziegler/rust-segmentstore v0.0.0-20241004144529-9d8087716ff0
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/crypto v0.23.0 // indirect
 	golang.org/x/net v0.25.0 // indirect

@@ -9,8 +9,6 @@ import (
 	"go.uber.org/zap"
 )
 
-const PartitionNameMetadataKey string = "cartero.produce.partition_name"
-
 type Server struct {
 	addressListener  net.Listener
 	partitionManager *partitionmanager.PartitionManager
@@ -18,9 +16,9 @@ type Server struct {
 	quit             chan struct{}
 }
 
-func New(partitionNames []string, address string, minioAddress string, s3AccessKey string, s3SecretAccessKey string, logger *zap.Logger) (*Server, error) {
+func New(partitionNames []string, address string, logAddresses []string, logger *zap.Logger) (*Server, error) {
 	logger.Info("Creating new server")
-	pm, err := partitionmanager.New(partitionNames, minioAddress, s3AccessKey, s3SecretAccessKey, logger)
+	pm, err := partitionmanager.New(partitionNames, logAddresses, logger)
 	if err != nil {
 		return nil, fmt.Errorf("error trying to create partition manager: %v", err)
 	}

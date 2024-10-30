@@ -57,6 +57,7 @@ func (client *Client) NewProducer(partitionName string, ReturnAcksOnChan bool) (
 		conn:             client.Conn,
 		logger:           client.logger,
 		partitionName:    partitionName,
+		messages:         make([][]byte, 0, 137),
 		Error:            make(chan ProduceError),
 		Acks:             make(chan uint64),
 		returnAcksOnChan: ReturnAcksOnChan,
@@ -76,7 +77,7 @@ func (p *Producer) AddBatch(message []byte) error {
 	}
 	p.lock.Lock()
 	defer p.lock.Unlock()
-	if p.addedMessageBatchSize(message) > MaxBatchSize {
+	if len(p.messages) > 137 && p.addedMessageBatchSize(message) > MaxBatchSize {
 		err := p.sendBatch()
 		if err != nil {
 			return fmt.Errorf("failed to send batch: %v", err)
@@ -85,7 +86,7 @@ func (p *Producer) AddBatch(message []byte) error {
 	}
 	p.messages = append(p.messages, message)
 	if len(p.messages) == 1 {
-		p.scheduleSend(p.epoch)
+		go p.scheduleSend(p.epoch)
 	}
 	return nil
 }
@@ -138,7 +139,7 @@ func (p *Producer) sendBatch() error {
 func (p *Producer) UpdateAcknowledged(ack *pb.ProduceAck) {
 	p.batchIdUnacknowledged.Store(ack.BatchId + 1)
 	p.lastLSNPlus1.Store(ack.Lsn + 1)
-	newNumMessagesAck := p.numMessagesAck.Load() + 1
+	newNumMessagesAck := p.numMessagesAck.Load() + uint64(ack.NumMessages)
 	p.numMessagesAck.Store(newNumMessagesAck)
 	// this can block the main loop for receiving messages
 	if p.returnAcksOnChan {

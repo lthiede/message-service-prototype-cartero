@@ -22,7 +22,8 @@ type stringSlice []string
 
 var logAddressFlag stringSlice
 var nFlag = flag.Int("n", 1, "number of concurrent clients")
-var pFlag = flag.Int("p", 0, "number of partitions. default value is one per client")
+var pFlag = flag.Int("p", 1, "number of partitions")
+var sFlag = flag.String("s", "localhost:8080", "server address")
 
 func (n *stringSlice) String() string {
 	return fmt.Sprintf("%v", []string(*n))
@@ -36,9 +37,6 @@ func (n *stringSlice) Set(value string) error {
 func main() {
 	flag.Var(&logAddressFlag, "o", "addresses of log nodes")
 	flag.Parse()
-	if *pFlag == 0 {
-		*pFlag = *nFlag
-	}
 	partitionNames := make([]string, 0, *pFlag)
 	for i := range *pFlag {
 		partitionNames = append(partitionNames, fmt.Sprintf("partition%d", i))
@@ -51,7 +49,7 @@ func main() {
 	// 	fmt.Printf("Error building logger: %v\n", err)
 	// 	return
 	// }
-	// server, err := server.New(partitionNames, "127.0.0.1:8080", logAddressFlag, logger)
+	// server, err := server.New(partitionNames, *sFlag, logAddressFlag, logger)
 	// if err != nil {
 	// 	fmt.Printf("Error creating server: %v\n", err)
 	// }
@@ -97,7 +95,7 @@ func experiment(partitionName string, messagesSent chan<- uint64) {
 		fmt.Printf("Error building logger: %v\n", err)
 		return
 	}
-	client, err := client.New("127.0.0.1:8080", "localhost:9000", "minioadmin", "minioadmin", logger)
+	client, err := client.New(*sFlag, "localhost:9000", "minioadmin", "minioadmin", logger)
 	if err != nil {
 		fmt.Printf("Error creating client: %v\n", err)
 		return

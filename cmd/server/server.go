@@ -17,6 +17,7 @@ type stringSlice []string
 // var cpuFlag = flag.Bool("c", false, "do cpu profiling")
 // var blockFlag = flag.Bool("b", false, "do block profiling")
 // var mutexFlag = flag.Bool("m", false, "do mutex profiling")
+var sFlag = flag.String("s", "localhost:8080", "server address")
 var logAddressFlag stringSlice
 
 func (n *stringSlice) String() string {
@@ -47,7 +48,7 @@ func main() {
 		log.Panicf("Error creating logger: %v", err)
 	}
 	defer logger.Sync()
-	server, err := server.New([]string{"partition0"}, "localhost:8080", logAddressFlag, logger)
+	server, err := server.New([]string{"partition0"}, *sFlag, logAddressFlag, logger)
 	if err != nil {
 		logger.Panic("Error creating server", zap.Error(err))
 	}

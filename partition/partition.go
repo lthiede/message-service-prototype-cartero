@@ -9,7 +9,7 @@ import (
 	pb "github.com/lthiede/cartero/proto"
 	"google.golang.org/protobuf/proto"
 
-	logclient "github.com/toziegler/rust-segmentstore/libsls-bindings/go_example/client"
+	//logclient "github.com/toziegler/rust-segmentstore/libsls-bindings/go_example/client"
 
 	"go.uber.org/zap"
 )
@@ -21,12 +21,12 @@ type Partition struct {
 	Alive              bool
 	AliveLock          sync.RWMutex
 	LogInteractionTask chan LogInteractionTask
-	logClient          *logclient.ClientWrapper
-	logger             *zap.Logger
-	newCommittedLSN    chan uint64
-	outstandingAcks    chan *ProduceRequest
-	nextLSNCommitted   atomic.Uint64 // initialized to default value 0
-	quit               chan struct{}
+	//logClient          *logclient.ClientWrapper
+	logger           *zap.Logger
+	newCommittedLSN  chan uint64
+	outstandingAcks  chan *ProduceRequest
+	nextLSNCommitted atomic.Uint64 // initialized to default value 0
+	quit             chan struct{}
 }
 
 type LogInteractionTask struct {
@@ -64,7 +64,7 @@ func New(name string, logAddresses []string, logger *zap.Logger) (*Partition, er
 		LogInteractionTask: make(chan LogInteractionTask),
 		quit:               make(chan struct{}),
 		newCommittedLSN:    make(chan uint64),
-		outstandingAcks:    make(chan *ProduceRequest, logclient.MaxOutstanding),
+		outstandingAcks:    make(chan *ProduceRequest, 128),
 		// logClient:          logClient,
 		logger: logger,
 	}
@@ -121,7 +121,7 @@ func (p *Partition) logInteractions() {
 			// if appendErr == nil {
 			// 	nextLSNAppended = lsn + 1
 			// 	p.logger.Info("Sent batch to log", zap.String("partitionName", p.Name), zap.Uint64("lsn", lsn), zap.Uint64("batchId", pr.BatchId), zap.Int("numberMessages", len(pr.Messages.Messages)))
-			if (nextLSNAppended+1)%logclient.MaxOutstanding == 0 {
+			if (nextLSNAppended+1)%128 == 0 {
 				p.newCommittedLSN <- nextLSNAppended - 1
 			}
 			p.outstandingAcks <- pr

@@ -14,7 +14,7 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-const payloadLength = 3797
+const payloadLength = 3800
 const warmupDuration = 10 * time.Second
 const experimentDuration = 10 * time.Second
 

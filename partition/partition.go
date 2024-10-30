@@ -1,20 +1,18 @@
 package partition
 
 import (
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	pb "github.com/lthiede/cartero/proto"
-	"google.golang.org/protobuf/proto"
 
 	//logclient "github.com/toziegler/rust-segmentstore/libsls-bindings/go_example/client"
 
 	"go.uber.org/zap"
 )
 
-const MaxBatchBytesSize = 3800
+const MaxMessageSize = 3800
 
 type Partition struct {
 	Name               string
@@ -24,19 +22,20 @@ type Partition struct {
 	//logClient          *logclient.ClientWrapper
 	logger           *zap.Logger
 	newCommittedLSN  chan uint64
-	outstandingAcks  chan *ProduceRequest
+	outstandingAcks  chan *AppendMessageRequest
 	nextLSNCommitted atomic.Uint64 // initialized to default value 0
 	quit             chan struct{}
 }
 
 type LogInteractionTask struct {
-	ProduceRequest       *ProduceRequest
+	AppendMessageRequest *AppendMessageRequest
 	pollCommittedRequest *pollCommittedRequest
 }
 
-type ProduceRequest struct {
+type AppendMessageRequest struct {
 	BatchId         uint64
-	Messages        *pb.Messages
+	MessageId       uint32
+	Message         []byte
 	ProduceResponse chan *pb.Response
 }
 
@@ -64,7 +63,7 @@ func New(name string, logAddresses []string, logger *zap.Logger) (*Partition, er
 		LogInteractionTask: make(chan LogInteractionTask),
 		quit:               make(chan struct{}),
 		newCommittedLSN:    make(chan uint64),
-		outstandingAcks:    make(chan *ProduceRequest, 128),
+		outstandingAcks:    make(chan *AppendMessageRequest, 128),
 		// logClient:          logClient,
 		logger: logger,
 	}
@@ -74,17 +73,6 @@ func New(name string, logAddresses []string, logger *zap.Logger) (*Partition, er
 }
 
 var MaxCheckLSNDelay = 50 * time.Millisecond
-
-func messageBytes(produceRequest *ProduceRequest) ([]byte, error) {
-	if proto.Size(produceRequest.Messages) > MaxBatchBytesSize {
-		return nil, fmt.Errorf("got batch with too many bytes. got %d bytes, max %d bytes", proto.Size(produceRequest.Messages), MaxBatchBytesSize)
-	}
-	message, err := proto.Marshal(produceRequest.Messages)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal message batch: %v", err)
-	}
-	return message, nil
-}
 
 func (p *Partition) schedulePollCommitted() {
 	time.Sleep(MaxCheckLSNDelay)
@@ -107,8 +95,8 @@ func (p *Partition) logInteractions() {
 			p.logger.Info("Stop handling produce", zap.String("partitionName", p.Name))
 			return
 		}
-		if lit.ProduceRequest != nil {
-			pr := lit.ProduceRequest
+		if lit.AppendMessageRequest != nil {
+			ar := lit.AppendMessageRequest
 			// message, err := messageBytes(pr)
 			// if err != nil {
 			// 	p.logger.Error("Failed to get message bytes",
@@ -124,7 +112,7 @@ func (p *Partition) logInteractions() {
 			if (nextLSNAppended+1)%128 == 0 {
 				p.newCommittedLSN <- nextLSNAppended - 1
 			}
-			p.outstandingAcks <- pr
+			p.outstandingAcks <- ar
 			nextLSNAppended++
 			if !checkScheduled {
 				go p.schedulePollCommitted()
@@ -264,13 +252,13 @@ func (p *Partition) handleAcks() {
 		oldNextLSNCommitted := p.nextLSNCommitted.Load()
 		var i uint64
 		for ; oldNextLSNCommitted+i <= committedLSN; i++ {
-			pr := <-p.outstandingAcks
-			pr.ProduceResponse <- &pb.Response{
+			ar := <-p.outstandingAcks
+			ar.ProduceResponse <- &pb.Response{
 				Response: &pb.Response_ProduceAck{
 					ProduceAck: &pb.ProduceAck{
-						BatchId:       pr.BatchId,
+						BatchId:       ar.BatchId,
+						MessageId:     ar.MessageId,
 						Lsn:           oldNextLSNCommitted + i,
-						NumMessages:   uint32(len(pr.Messages.Messages)),
 						PartitionName: p.Name,
 					},
 				},
@@ -279,26 +267,6 @@ func (p *Partition) handleAcks() {
 		p.logger.Info("Acknowledged committed batches", zap.String("partitionName", p.Name), zap.Uint64("numberAck", committedLSN-oldNextLSNCommitted+1))
 		p.nextLSNCommitted.Store(committedLSN + 1)
 	}
-}
-
-func (p *Partition) acknowledgeCommitted(committedLSN uint64) {
-	oldNextLSNCommitted := p.nextLSNCommitted.Load()
-	var i uint64
-	for ; i <= committedLSN-oldNextLSNCommitted; i++ {
-		pr := <-p.outstandingAcks
-		pr.ProduceResponse <- &pb.Response{
-			Response: &pb.Response_ProduceAck{
-				ProduceAck: &pb.ProduceAck{
-					BatchId:       pr.BatchId,
-					Lsn:           oldNextLSNCommitted + i,
-					NumMessages:   uint32(len(pr.Messages.Messages)),
-					PartitionName: p.Name,
-				},
-			},
-		}
-	}
-	p.logger.Info("Acknowledged committed batches", zap.String("partitionName", p.Name), zap.Uint64("numberAck", committedLSN-oldNextLSNCommitted+1))
-	p.nextLSNCommitted.Store(committedLSN + 1)
 }
 
 func (p *Partition) NextLSN() uint64 {

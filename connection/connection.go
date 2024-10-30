@@ -71,20 +71,23 @@ func (c *Connection) handleRequests() {
 					}
 					c.partitionCache[produceReq.PartitionName] = p
 				}
-				p.AliveLock.RLock()
-				if !p.Alive {
-					delete(c.partitionCache, produceReq.PartitionName)
-					c.logger.Error("Produce request to dead partition", zap.String("partitionName", produceReq.PartitionName), zap.Uint64("batchId", produceReq.BatchId))
-				} else {
-					p.LogInteractionTask <- partition.LogInteractionTask{
-						ProduceRequest: &partition.ProduceRequest{
-							BatchId:         produceReq.BatchId,
-							Messages:        produceReq.Messages,
-							ProduceResponse: c.responses,
-						},
+				for i, message := range produceReq.Messages.Messages {
+					p.AliveLock.RLock()
+					if !p.Alive {
+						delete(c.partitionCache, produceReq.PartitionName)
+						c.logger.Error("Produce request to dead partition", zap.String("partitionName", produceReq.PartitionName), zap.Uint64("batchId", produceReq.BatchId))
+					} else {
+						p.LogInteractionTask <- partition.LogInteractionTask{
+							AppendMessageRequest: &partition.AppendMessageRequest{
+								BatchId:         produceReq.BatchId,
+								MessageId:       uint32(i),
+								Message:         message,
+								ProduceResponse: c.responses,
+							},
+						}
 					}
+					p.AliveLock.RUnlock()
 				}
-				p.AliveLock.RUnlock()
 				// c.responses <- &pb.Response{
 				// 	Response: &pb.Response_ProduceAck{
 				// 		ProduceAck: &pb.ProduceAck{

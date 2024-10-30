@@ -14,9 +14,9 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-var MaxMessagesPerBatch = 1
 var MaxPublishDelay = 50 * time.Millisecond
-var MaxBatchSize = 3800
+var MaxBatchSize = 524288
+var MaxMessageSize = 3800
 
 type Producer struct {
 	client                *Client
@@ -71,8 +71,8 @@ func (client *Client) NewProducer(partitionName string, ReturnAcksOnChan bool) (
 }
 
 func (p *Producer) AddBatch(message []byte) error {
-	if p.onlyMessageBatchSize(message) > MaxBatchSize {
-		return fmt.Errorf("to many bytes in message, max number of bytes is %d", MaxBatchSize)
+	if len(message) > MaxMessageSize {
+		return fmt.Errorf("to many bytes in message, max number of bytes is %d", MaxMessageSize)
 	}
 	p.lock.Lock()
 	defer p.lock.Unlock()
@@ -84,17 +84,9 @@ func (p *Producer) AddBatch(message []byte) error {
 		p.epoch++
 	}
 	p.messages = append(p.messages, message)
-	if len(p.messages) == 1 && MaxMessagesPerBatch > 1 {
+	if len(p.messages) == 1 {
 		p.scheduleSend(p.epoch)
 	}
-	if len(p.messages) < MaxMessagesPerBatch {
-		return nil
-	}
-	err := p.sendBatch()
-	if err != nil {
-		return fmt.Errorf("failed to send batch: %v", err)
-	}
-	p.epoch++
 	return nil
 }
 
@@ -111,12 +103,6 @@ func (p *Producer) scheduleSend(epoch int) {
 			}
 		}
 	}
-}
-
-func (p *Producer) onlyMessageBatchSize(newMessage []byte) int {
-	return proto.Size(&pb.Messages{
-		Messages: [][]byte{newMessage},
-	})
 }
 
 func (p *Producer) addedMessageBatchSize(newMessage []byte) int {
@@ -152,7 +138,7 @@ func (p *Producer) sendBatch() error {
 func (p *Producer) UpdateAcknowledged(ack *pb.ProduceAck) {
 	p.batchIdUnacknowledged.Store(ack.BatchId + 1)
 	p.lastLSNPlus1.Store(ack.Lsn + 1)
-	newNumMessagesAck := p.numMessagesAck.Load() + uint64(ack.NumMessages)
+	newNumMessagesAck := p.numMessagesAck.Load() + 1
 	p.numMessagesAck.Store(newNumMessagesAck)
 	// this can block the main loop for receiving messages
 	if p.returnAcksOnChan {

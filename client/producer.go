@@ -138,8 +138,8 @@ func (p *Producer) sendBatch() error {
 
 func (p *Producer) UpdateAcknowledged(ack *pb.ProduceAck) {
 	p.batchIdUnacknowledged.Store(ack.BatchId + 1)
-	p.lastLSNPlus1.Store(ack.Lsn + 1)
-	newNumMessagesAck := p.numMessagesAck.Load() + 1
+	p.lastLSNPlus1.Store(ack.StartLsn + uint64(ack.NumMessages) + 1)
+	newNumMessagesAck := p.numMessagesAck.Load() + uint64(ack.NumMessages)
 	p.numMessagesAck.Store(newNumMessagesAck)
 	// this can block the main loop for receiving messages
 	if p.returnAcksOnChan {

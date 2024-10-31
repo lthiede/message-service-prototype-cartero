@@ -43,6 +43,7 @@ func New(conn net.Conn, partitionManager *partitionmanager.PartitionManager, log
 	return c, nil
 }
 
+const messagesPerAck = 10
 const payloadLength = 3797
 
 func (c *Connection) handleRequests() {
@@ -72,7 +73,7 @@ func (c *Connection) handleRequests() {
 					}
 					c.partitionCache[produceReq.PartitionName] = p
 				}
-				for i, message := range produceReq.Messages.Messages {
+				for i := 0; i < len(produceReq.Messages.Messages); i += messagesPerAck {
 					p.AliveLock.RLock()
 					if !p.Alive {
 						delete(c.partitionCache, produceReq.PartitionName)
@@ -81,8 +82,8 @@ func (c *Connection) handleRequests() {
 						p.LogInteractionTask <- partition.LogInteractionTask{
 							AppendMessageRequest: &partition.AppendMessageRequest{
 								BatchId:         produceReq.BatchId,
-								MessageId:       uint32(i),
-								Message:         message,
+								StartMessageId:  uint32(i),
+								Messages:        produceReq.Messages.Messages[i:min(i+messagesPerAck, len(produceReq.Messages.Messages))],
 								ProduceResponse: c.responses,
 							},
 						}

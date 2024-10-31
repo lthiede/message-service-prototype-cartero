@@ -22,7 +22,7 @@ type Partition struct {
 	//logClient          *logclient.ClientWrapper
 	logger           *zap.Logger
 	newCommittedLSN  chan uint64
-	outstandingAcks  chan *AppendMessageRequest
+	outstandingAcks  chan *outstandingAck
 	nextLSNCommitted atomic.Uint64 // initialized to default value 0
 	quit             chan struct{}
 }
@@ -34,8 +34,14 @@ type LogInteractionTask struct {
 
 type AppendMessageRequest struct {
 	BatchId         uint64
+	StartMessageId  uint32
+	Messages        [][]byte
+	ProduceResponse chan *pb.Response
+}
+
+type outstandingAck struct {
+	BatchId         uint64
 	MessageId       uint32
-	Message         []byte
 	ProduceResponse chan *pb.Response
 }
 
@@ -63,7 +69,7 @@ func New(name string, logAddresses []string, logger *zap.Logger) (*Partition, er
 		LogInteractionTask: make(chan LogInteractionTask),
 		quit:               make(chan struct{}),
 		newCommittedLSN:    make(chan uint64),
-		outstandingAcks:    make(chan *AppendMessageRequest, 128),
+		outstandingAcks:    make(chan *outstandingAck, 128),
 		// logClient:          logClient,
 		logger: logger,
 	}
@@ -109,14 +115,20 @@ func (p *Partition) logInteractions() {
 			// if appendErr == nil {
 			// 	nextLSNAppended = lsn + 1
 			// 	p.logger.Info("Sent batch to log", zap.String("partitionName", p.Name), zap.Uint64("lsn", lsn), zap.Uint64("batchId", pr.BatchId), zap.Int("numberMessages", len(pr.Messages.Messages)))
-			if (nextLSNAppended+1)%128 == 0 {
-				p.newCommittedLSN <- nextLSNAppended - 1
-			}
-			p.outstandingAcks <- ar
-			nextLSNAppended++
-			if !checkScheduled {
-				go p.schedulePollCommitted()
-				checkScheduled = true
+			for i := range ar.Messages {
+				if (nextLSNAppended+1)%128 == 0 {
+					p.newCommittedLSN <- nextLSNAppended - 1
+				}
+				p.outstandingAcks <- &outstandingAck{
+					BatchId:         ar.BatchId,
+					MessageId:       ar.StartMessageId + uint32(i),
+					ProduceResponse: ar.ProduceResponse,
+				}
+				nextLSNAppended++
+				if !checkScheduled {
+					go p.schedulePollCommitted()
+					checkScheduled = true
+				}
 			}
 			// 	break
 			// }
@@ -251,16 +263,42 @@ func (p *Partition) handleAcks() {
 		p.logger.Info("Acknowledge committed batches", zap.Uint64("lsn", committedLSN), zap.String("partitionName", p.Name))
 		oldNextLSNCommitted := p.nextLSNCommitted.Load()
 		var i uint64
+		var currentAck *pb.ProduceAck = nil
+		var currentResponseChan chan *pb.Response
 		for ; oldNextLSNCommitted+i <= committedLSN; i++ {
 			ar := <-p.outstandingAcks
-			ar.ProduceResponse <- &pb.Response{
-				Response: &pb.Response_ProduceAck{
-					ProduceAck: &pb.ProduceAck{
-						BatchId:       ar.BatchId,
-						MessageId:     ar.MessageId,
-						Lsn:           oldNextLSNCommitted + i,
-						PartitionName: p.Name,
+			if currentAck == nil {
+				currentAck = &pb.ProduceAck{
+					BatchId:        ar.BatchId,
+					StartMessageId: ar.MessageId,
+					StartLsn:       oldNextLSNCommitted + i,
+					NumMessages:    1,
+					PartitionName:  p.Name,
+				}
+				currentResponseChan = ar.ProduceResponse
+			} else if currentResponseChan == ar.ProduceResponse && currentAck.BatchId == ar.BatchId {
+				currentAck.NumMessages++
+			} else {
+				currentResponseChan <- &pb.Response{
+					Response: &pb.Response_ProduceAck{
+						ProduceAck: currentAck,
 					},
+				}
+				currentAck = &pb.ProduceAck{
+					BatchId:        ar.BatchId,
+					StartMessageId: ar.MessageId,
+					StartLsn:       oldNextLSNCommitted + i,
+					NumMessages:    1,
+					PartitionName:  p.Name,
+				}
+				currentResponseChan = ar.ProduceResponse
+			}
+
+		}
+		if currentAck != nil {
+			currentResponseChan <- &pb.Response{
+				Response: &pb.Response_ProduceAck{
+					ProduceAck: currentAck,
 				},
 			}
 		}

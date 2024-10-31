@@ -12,6 +12,7 @@ import (
 	"github.com/lthiede/cartero/readertobytereader"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/encoding/protodelim"
+	"google.golang.org/protobuf/proto"
 )
 
 const timeout time.Duration = 60 * time.Second
@@ -96,6 +97,7 @@ func (c *Connection) handleRequests() {
 							PartitionName: produceReq.PartitionName,
 							Lsn:           lsn,
 							NumMessages:   uint32(len(produceReq.Messages.Messages)),
+							Size:          uint64(proto.Size(request)),
 						},
 					},
 				}

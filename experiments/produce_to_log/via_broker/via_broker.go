@@ -109,6 +109,7 @@ func experiment(partitionName string, messagesSent chan<- uint64) {
 	defer producer.Close()
 	log.Println("Starting warmup")
 	warmupFinished := timer(warmupDuration)
+	var count uint64
 warmup:
 	for {
 		select {
@@ -119,6 +120,7 @@ warmup:
 			if err != nil {
 				return
 			}
+			count++
 		}
 	}
 	startNumMessages := producer.NumMessagesAck()
@@ -134,10 +136,12 @@ experiment:
 			if err != nil {
 				return
 			}
+			count++
 		}
 	}
 	endNumMessages := producer.NumMessagesAck()
 	log.Printf("Finished measurements with %d messages ack\n", endNumMessages)
+	log.Printf("Arrived %d B\n. Send %d messages", producer.NumBytesCommitted(), count)
 	messagesSent <- endNumMessages - startNumMessages
 }
 

@@ -256,9 +256,8 @@ func (p *Partition) handleAcks() {
 			ar.ProduceResponse <- &pb.Response{
 				Response: &pb.Response_ProduceAck{
 					ProduceAck: &pb.ProduceAck{
-						BatchId: ar.BatchId,
-						//MessageId:     ar.MessageId,
-						NumMessages:   1,
+						BatchId:       ar.BatchId,
+						MessageId:     ar.MessageId,
 						Lsn:           oldNextLSNCommitted + i,
 						PartitionName: p.Name,
 					},

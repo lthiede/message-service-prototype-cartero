@@ -12,7 +12,6 @@ import (
 	"github.com/lthiede/cartero/readertobytereader"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/encoding/protodelim"
-	"google.golang.org/protobuf/proto"
 )
 
 const timeout time.Duration = 60 * time.Second
@@ -90,18 +89,19 @@ func (c *Connection) handleRequests() {
 				// 	}
 				// 	p.AliveLock.RUnlock()
 				// }
-				c.responses <- &pb.Response{
-					Response: &pb.Response_ProduceAck{
-						ProduceAck: &pb.ProduceAck{
-							BatchId:       produceReq.BatchId,
-							PartitionName: produceReq.PartitionName,
-							Lsn:           lsn,
-							NumMessages:   uint32(len(produceReq.Messages.Messages)),
-							Size:          uint64(proto.Size(request)),
+				for i := range produceReq.Messages.Messages {
+					c.responses <- &pb.Response{
+						Response: &pb.Response_ProduceAck{
+							ProduceAck: &pb.ProduceAck{
+								BatchId:       produceReq.BatchId,
+								MessageId:     uint32(i),
+								PartitionName: produceReq.PartitionName,
+								Lsn:           lsn,
+							},
 						},
-					},
+					}
+					lsn++
 				}
-				lsn++
 			case *pb.Request_ConsumeRequest:
 				consumeReq := req.ConsumeRequest
 				p, ok := c.partitionCache[consumeReq.PartitionName]

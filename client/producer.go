@@ -30,7 +30,6 @@ type Producer struct {
 	batchIdUnacknowledged atomic.Uint64 // implicitly starts at 0
 	lastLSNPlus1          atomic.Uint64 // implicitly starts at 0
 	numMessagesAck        atomic.Uint64 // implicitly starts at 0
-	numBytesCommitted     atomic.Uint64
 	Error                 chan ProduceError
 	Acks                  chan uint64
 	returnAcksOnChan      bool
@@ -140,10 +139,8 @@ func (p *Producer) sendBatch() error {
 func (p *Producer) UpdateAcknowledged(ack *pb.ProduceAck) {
 	p.batchIdUnacknowledged.Store(ack.BatchId + 1)
 	p.lastLSNPlus1.Store(ack.Lsn + 1)
-	newNumMessagesAck := p.numMessagesAck.Load() + uint64(ack.NumMessages)
+	newNumMessagesAck := p.numMessagesAck.Load() + 1
 	p.numMessagesAck.Store(newNumMessagesAck)
-	newNumBytesCommitted := p.numBytesCommitted.Load() + ack.Size
-	p.numBytesCommitted.Store(newNumBytesCommitted)
 	// this can block the main loop for receiving messages
 	if p.returnAcksOnChan {
 		p.Acks <- newNumMessagesAck
@@ -152,10 +149,6 @@ func (p *Producer) UpdateAcknowledged(ack *pb.ProduceAck) {
 
 func (p *Producer) NumMessagesAck() uint64 {
 	return p.numMessagesAck.Load()
-}
-
-func (p *Producer) NumBytesCommitted() uint64 {
-	return p.numBytesCommitted.Load()
 }
 
 func (p *Producer) BatchIdAck() uint64 {

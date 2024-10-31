@@ -141,7 +141,7 @@ experiment:
 	}
 	endNumMessages := producer.NumMessagesAck()
 	log.Printf("Finished measurements with %d messages ack\n", endNumMessages)
-	log.Printf("Arrived %d B\n. Send %d messages", producer.NumBytesCommitted(), count)
+	log.Printf("Sent %d messages\n", count)
 	messagesSent <- endNumMessages - startNumMessages
 }
 

@@ -42,11 +42,9 @@ message Response {
 
 message ProduceAck {
     uint64 batch_id = 1;
- //   uint32 message_id = 2;
-    uint32 num_messages = 2;
+    uint32 message_id = 2;
     uint64 lsn = 3;
     string partition_name = 4;
-    uint64 size = 5;
 }
 
 message ConsumeResponse {

@@ -35,7 +35,6 @@ type LogInteractionTask struct {
 
 type AppendMessageRequest struct {
 	BatchId         uint64
-	StartMessageId  uint32
 	Messages        [][]byte
 	ProduceResponse chan *pb.Response
 }
@@ -113,7 +112,7 @@ func (p *Partition) logInteractions() {
 						nextLSNAppended = lsn + 1
 						p.outstandingAcks <- &outstandingAck{
 							BatchId:         ar.BatchId,
-							MessageId:       ar.StartMessageId + uint32(i),
+							MessageId:       uint32(i),
 							ProduceResponse: ar.ProduceResponse,
 						}
 						break

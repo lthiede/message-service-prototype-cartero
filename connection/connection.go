@@ -43,8 +43,6 @@ func New(conn net.Conn, partitionManager *partitionmanager.PartitionManager, log
 	return c, nil
 }
 
-const messagesPerAck = 1024
-
 func (c *Connection) handleRequests() {
 	for {
 		select {
@@ -71,23 +69,22 @@ func (c *Connection) handleRequests() {
 					}
 					c.partitionCache[produceReq.PartitionName] = p
 				}
-				for i := 0; i < len(produceReq.Messages.Messages); i += messagesPerAck {
-					p.AliveLock.RLock()
-					if !p.Alive {
-						delete(c.partitionCache, produceReq.PartitionName)
-						c.logger.Error("Produce request to dead partition", zap.String("partitionName", produceReq.PartitionName), zap.Uint64("batchId", produceReq.BatchId))
-					} else {
-						p.LogInteractionTask <- partition.LogInteractionTask{
-							AppendMessageRequest: &partition.AppendMessageRequest{
-								BatchId:         produceReq.BatchId,
-								StartMessageId:  uint32(i),
-								Messages:        produceReq.Messages.Messages[i:min(i+messagesPerAck, len(produceReq.Messages.Messages))],
-								ProduceResponse: c.responses,
-							},
-						}
+				// for i := 0; i < len(produceReq.Messages.Messages); i += messagesPerAck {
+				p.AliveLock.RLock()
+				if !p.Alive {
+					delete(c.partitionCache, produceReq.PartitionName)
+					c.logger.Error("Produce request to dead partition", zap.String("partitionName", produceReq.PartitionName), zap.Uint64("batchId", produceReq.BatchId))
+				} else {
+					p.LogInteractionTask <- partition.LogInteractionTask{
+						AppendMessageRequest: &partition.AppendMessageRequest{
+							BatchId:         produceReq.BatchId,
+							Messages:        produceReq.Messages.Messages,
+							ProduceResponse: c.responses,
+						},
 					}
-					p.AliveLock.RUnlock()
 				}
+				p.AliveLock.RUnlock()
+				// }
 			case *pb.Request_ConsumeRequest:
 				consumeReq := req.ConsumeRequest
 				p, ok := c.partitionCache[consumeReq.PartitionName]

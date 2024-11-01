@@ -10,7 +10,7 @@ import (
 	logclient "github.com/toziegler/rust-segmentstore/libsls-bindings/go_example/client"
 )
 
-const payloadLength = 3797
+const payloadLength = 3800
 const warmupDuration = 5 * time.Second
 const experimentDuration = 15 * time.Second
 
@@ -30,6 +30,8 @@ func (n *stringSlice) Set(value string) error {
 
 // c06 to c08
 // 1 clients sent 2621459 messages in 15 seconds; message rate 174763 msg/s; bw 664102946 B/s
+// 2 clients sent 3331075 messages in 15 seconds; message rate 222071 msg/s; bw 843872333 B/s
+// 3 clients sent 3342376 messages in 15 seconds; message rate 222825 msg/s; bw 846735253 B/s
 func main() {
 	flag.Var(&logAddressFlag, "o", "addresses of log nodes")
 	flag.Parse()

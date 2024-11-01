@@ -43,8 +43,7 @@ func New(conn net.Conn, partitionManager *partitionmanager.PartitionManager, log
 	return c, nil
 }
 
-const messagesPerAck = 10
-const payloadLength = 3797
+const messagesPerAck = 1024
 
 func (c *Connection) handleRequests() {
 	for {

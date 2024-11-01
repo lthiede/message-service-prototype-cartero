@@ -41,19 +41,6 @@ func main() {
 	for i := range *pFlag {
 		partitionNames = append(partitionNames, fmt.Sprintf("partition%d", i))
 	}
-	// config := zap.NewDevelopmentConfig()
-	// config.OutputPaths = []string{"./server_logs"}
-	// config.Level.SetLevel(zapcore.InfoLevel)
-	// logger, err := config.Build()
-	// if err != nil {
-	// 	fmt.Printf("Error building logger: %v\n", err)
-	// 	return
-	// }
-	// server, err := server.New(partitionNames, *sFlag, logAddressFlag, logger)
-	// if err != nil {
-	// 	fmt.Printf("Error creating server: %v\n", err)
-	// }
-	// defer server.Close()
 	returnChans := make([]chan uint64, 0, *nFlag)
 	for range *nFlag {
 		returnChans = append(returnChans, make(chan uint64))
@@ -101,6 +88,10 @@ func experiment(partitionName string, messagesSent chan<- uint64) {
 		return
 	}
 	defer client.Close()
+	err = client.CreatePartition(partitionName)
+	if err != nil {
+		fmt.Printf("Error creating partition: %v\n", err)
+	}
 	producer, err := client.NewProducer(partitionName, false)
 	if err != nil {
 		fmt.Printf("Error creating producer: %v\n", err)

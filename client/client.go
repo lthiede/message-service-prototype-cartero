@@ -143,7 +143,6 @@ func (c *Client) handleResponses() {
 					c.logger.Error("Partition not recognized", zap.String("partitionName", produceAck.PartitionName))
 					continue
 				}
-				c.logger.Info("Received ack", zap.Uint64("batchId", produceAck.BatchId), zap.Uint32("numMessages", produceAck.NumMessages), zap.Uint64("startLSN", produceAck.StartLsn))
 				p.UpdateAcknowledged(produceAck)
 				c.producersRWMutex.RUnlock()
 			case *pb.Response_ConsumeResponse:

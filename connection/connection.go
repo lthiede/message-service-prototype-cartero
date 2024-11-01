@@ -47,7 +47,6 @@ const messagesPerAck = 10
 const payloadLength = 3797
 
 func (c *Connection) handleRequests() {
-	// var lsn uint64
 	for {
 		select {
 		case <-c.quit:
@@ -90,19 +89,6 @@ func (c *Connection) handleRequests() {
 					}
 					p.AliveLock.RUnlock()
 				}
-				// for i := range produceReq.Messages.Messages {
-				// 	c.responses <- &pb.Response{
-				// 		Response: &pb.Response_ProduceAck{
-				// 			ProduceAck: &pb.ProduceAck{
-				// 				BatchId:       produceReq.BatchId,
-				// 				MessageId:     uint32(i),
-				// 				PartitionName: produceReq.PartitionName,
-				// 				Lsn:           lsn,
-				// 			},
-				// 		},
-				// 	}
-				// 	lsn++
-				// }
 			case *pb.Request_ConsumeRequest:
 				consumeReq := req.ConsumeRequest
 				p, ok := c.partitionCache[consumeReq.PartitionName]

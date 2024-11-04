@@ -85,9 +85,9 @@ func (c *Connection) handleRequests() {
 				// 	}
 				// }
 				// p.AliveLock.RUnlock()
-				numMessages := uint32(len(produceReq.EndOffsetsExclusively))
-				c.logger.Info("Trying to read payload", zap.Uint32("payloadSize", req.ProduceRequest.EndOffsetsExclusively[numMessages-1]))
-				payload := make([]byte, req.ProduceRequest.EndOffsetsExclusively[numMessages-1])
+				numBytes := uint32(len(produceReq.EndOffsetsExclusively))
+				c.logger.Info("Trying to read payload", zap.Uint32("payloadSize", req.ProduceRequest.EndOffsetsExclusively[numBytes-1]))
+				payload := make([]byte, req.ProduceRequest.EndOffsetsExclusively[numBytes-1])
 				for i := 0; i < len(payload); {
 					n, err := c.conn.Read(payload[i:])
 					if err != nil {
@@ -101,13 +101,13 @@ func (c *Connection) handleRequests() {
 						ProduceAck: &pb.ProduceAck{
 							BatchId:        produceReq.BatchId,
 							StartMessageId: uint32(0),
-							NumMessages:    numMessages,
+							NumMessages:    uint32(len(produceReq.EndOffsetsExclusively)),
 							PartitionName:  produceReq.PartitionName,
 							StartLsn:       lsn,
 						},
 					},
 				}
-				lsn += uint64(numMessages)
+				lsn += uint64(len(produceReq.EndOffsetsExclusively))
 			case *pb.Request_ConsumeRequest:
 				consumeReq := req.ConsumeRequest
 				p, ok := c.partitionCache[consumeReq.PartitionName]

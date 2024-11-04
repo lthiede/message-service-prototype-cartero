@@ -87,7 +87,6 @@ func (c *Connection) handleRequests() {
 				// p.AliveLock.RUnlock()
 				numMessages := uint32(len(produceReq.EndOffsetsExclusively))
 				numBytes := req.ProduceRequest.EndOffsetsExclusively[numMessages-1]
-				c.logger.Info("Reading payload", zap.Uint32("numMessages", numMessages), zap.Uint32("numBytes", numBytes))
 				payload := make([]byte, numBytes)
 				for i := 0; i < int(numBytes); {
 					n, err := c.conn.Read(payload[i:])
@@ -95,17 +94,22 @@ func (c *Connection) handleRequests() {
 					}
 					i += n
 				}
-				c.responses <- &pb.Response{
-					Response: &pb.Response_ProduceAck{
-						ProduceAck: &pb.ProduceAck{
-							BatchId:        produceReq.BatchId,
-							StartMessageId: uint32(0),
-							NumMessages:    numMessages,
-							PartitionName:  produceReq.PartitionName,
-							StartLsn:       lsn,
+				var i uint32
+				for i = 0; i < numMessages; i += 128 {
+					numMessagesAck := min(i+128, numMessages) - i
+					c.responses <- &pb.Response{
+						Response: &pb.Response_ProduceAck{
+							ProduceAck: &pb.ProduceAck{
+								BatchId:        produceReq.BatchId,
+								StartMessageId: uint32(0),
+								NumMessages:    numMessagesAck,
+								PartitionName:  produceReq.PartitionName,
+								StartLsn:       lsn,
+							},
 						},
-					},
+					}
 				}
+
 				lsn += uint64(len(produceReq.EndOffsetsExclusively))
 			case *pb.Request_ConsumeRequest:
 				consumeReq := req.ConsumeRequest

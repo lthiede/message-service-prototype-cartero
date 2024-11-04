@@ -85,23 +85,21 @@ func (c *Connection) handleRequests() {
 				// 	}
 				// }
 				// p.AliveLock.RUnlock()
-				numBytes := uint32(len(produceReq.EndOffsetsExclusively))
-				c.logger.Info("Trying to read payload", zap.Uint32("payloadSize", req.ProduceRequest.EndOffsetsExclusively[numBytes-1]))
-				payload := make([]byte, req.ProduceRequest.EndOffsetsExclusively[numBytes-1])
-				for i := 0; i < len(payload); {
+				numMessages := uint32(len(produceReq.EndOffsetsExclusively))
+				numBytes := req.ProduceRequest.EndOffsetsExclusively[numMessages-1]
+				payload := make([]byte, numBytes)
+				for i := 0; i < int(numBytes); {
 					n, err := c.conn.Read(payload[i:])
 					if err != nil {
-						c.logger.Error("Failed to read payload", zap.Error(err))
 					}
 					i += n
-					c.logger.Info("Read payload bytes", zap.Int("read", n), zap.Int("total", i))
 				}
 				c.responses <- &pb.Response{
 					Response: &pb.Response_ProduceAck{
 						ProduceAck: &pb.ProduceAck{
 							BatchId:        produceReq.BatchId,
 							StartMessageId: uint32(0),
-							NumMessages:    uint32(len(produceReq.EndOffsetsExclusively)),
+							NumMessages:    numMessages,
 							PartitionName:  produceReq.PartitionName,
 							StartLsn:       lsn,
 						},

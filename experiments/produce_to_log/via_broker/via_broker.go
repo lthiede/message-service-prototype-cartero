@@ -15,8 +15,8 @@ import (
 )
 
 const payloadLength = 3800
-const warmupDuration = 10 * time.Second
-const experimentDuration = 10 * time.Second
+const warmupDuration = 60 * time.Second
+const experimentDuration = 120 * time.Second
 
 type stringSlice []string
 
@@ -48,6 +48,8 @@ func (n *stringSlice) Set(value string) error {
 // 3 clients sent 1293554 messages on 3 channels in 10 seconds; message rate 129355 msg/s; bw 491550520 B/s
 // ack per batch, through partition, separate payload, no ack go routine
 // 3 clients sent 1608517 messages on 3 channels in 10 seconds; message rate 160851 msg/s; bw 611236460 B/s
+
+// longer experiments starting here
 func main() {
 	flag.Var(&logAddressFlag, "o", "addresses of log nodes")
 	flag.Parse()

@@ -34,6 +34,7 @@ func (n *stringSlice) Set(value string) error {
 	return nil
 }
 
+// 16 clients sent 2073675 messages on 8 channels in 10 seconds; message rate 207367 msg/s; bw 787996500 B/s
 func main() {
 	flag.Var(&logAddressFlag, "o", "addresses of log nodes")
 	flag.Parse()

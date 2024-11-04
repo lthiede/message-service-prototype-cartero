@@ -44,6 +44,7 @@ func New(conn net.Conn, partitionManager *partitionmanager.PartitionManager, log
 }
 
 func (c *Connection) handleRequests() {
+	var lsn uint64
 	for {
 		select {
 		case <-c.quit:
@@ -60,31 +61,44 @@ func (c *Connection) handleRequests() {
 			switch req := request.Request.(type) {
 			case *pb.Request_ProduceRequest:
 				produceReq := req.ProduceRequest
-				p, ok := c.partitionCache[produceReq.PartitionName]
-				if !ok {
-					p, err = c.partitionManager.GetPartition(produceReq.PartitionName)
-					if err != nil {
-						c.logger.Error("Error getting partition", zap.Error(err))
-						continue
-					}
-					c.partitionCache[produceReq.PartitionName] = p
-				}
-				// for i := 0; i < len(produceReq.Messages.Messages); i += messagesPerAck {
-				p.AliveLock.RLock()
-				if !p.Alive {
-					delete(c.partitionCache, produceReq.PartitionName)
-					c.logger.Error("Produce request to dead partition", zap.String("partitionName", produceReq.PartitionName), zap.Uint64("batchId", produceReq.BatchId))
-				} else {
-					p.LogInteractionTask <- partition.LogInteractionTask{
-						AppendMessageRequest: &partition.AppendMessageRequest{
-							BatchId:         produceReq.BatchId,
-							Messages:        produceReq.Messages.Messages,
-							ProduceResponse: c.responses,
+				// p, ok := c.partitionCache[produceReq.PartitionName]
+				// if !ok {
+				// 	p, err = c.partitionManager.GetPartition(produceReq.PartitionName)
+				// 	if err != nil {
+				// 		c.logger.Error("Error getting partition", zap.Error(err))
+				// 		continue
+				// 	}
+				// 	c.partitionCache[produceReq.PartitionName] = p
+				// }
+				// p.AliveLock.RLock()
+				// if !p.Alive {
+				// 	delete(c.partitionCache, produceReq.PartitionName)
+				// 	c.logger.Error("Produce request to dead partition", zap.String("partitionName", produceReq.PartitionName), zap.Uint64("batchId", produceReq.BatchId))
+				// } else {
+				// 	p.LogInteractionTask <- partition.LogInteractionTask{
+				// 		AppendMessageRequest: &partition.AppendMessageRequest{
+				// 			BatchId:         produceReq.BatchId,
+				// 			Messages:        produceReq.Messages.Messages,
+				// 			ProduceResponse: c.responses,
+				// 		},
+				// 	}
+				// }
+				// p.AliveLock.RUnlock()
+				for i := 0; i < len(produceReq.Messages.Messages); i += 128 {
+					numMessages := uint32(min(len(produceReq.Messages.Messages), i+128) - i)
+					c.responses <- &pb.Response{
+						Response: &pb.Response_ProduceAck{
+							ProduceAck: &pb.ProduceAck{
+								BatchId:        produceReq.BatchId,
+								StartMessageId: uint32(i),
+								NumMessages:    numMessages,
+								PartitionName:  produceReq.PartitionName,
+								StartLsn:       lsn,
+							},
 						},
 					}
+					lsn += uint64(numMessages)
 				}
-				p.AliveLock.RUnlock()
-				// }
 			case *pb.Request_ConsumeRequest:
 				consumeReq := req.ConsumeRequest
 				p, ok := c.partitionCache[consumeReq.PartitionName]

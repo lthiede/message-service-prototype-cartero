@@ -137,6 +137,8 @@ func (p *Producer) sendBatch() error {
 			return fmt.Errorf("Failed to send produce payload over wire: %v", err)
 		}
 	}
+	p.logger.Info("Wrote payload", zap.Uint32("payloadSize", p.payloadSize))
+	p.connWriteMutex.Unlock()
 	p.batchId++
 	p.messages = nil
 	p.payloadSize = 0

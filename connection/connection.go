@@ -60,6 +60,7 @@ func (c *Connection) handleRequests() {
 			}
 			switch req := request.Request.(type) {
 			case *pb.Request_ProduceRequest:
+				c.logger.Info("Got a produce request")
 				produceReq := req.ProduceRequest
 				// p, ok := c.partitionCache[produceReq.PartitionName]
 				// if !ok {
@@ -85,6 +86,7 @@ func (c *Connection) handleRequests() {
 				// }
 				// p.AliveLock.RUnlock()
 				numMessages := uint32(len(produceReq.EndOffsetsExclusively))
+				c.logger.Info("Trying to read payload", zap.Uint32("payloadSize", req.ProduceRequest.EndOffsetsExclusively[numMessages-1]))
 				payload := make([]byte, req.ProduceRequest.EndOffsetsExclusively[numMessages-1])
 				var i uint32
 				for i < numMessages {
@@ -93,6 +95,7 @@ func (c *Connection) handleRequests() {
 						c.logger.Error("Failed to read payload", zap.Error(err))
 					}
 					i += uint32(n)
+					c.logger.Info("Read payload bytes", zap.Int("read", n), zap.Uint32("total", i))
 				}
 				c.responses <- &pb.Response{
 					Response: &pb.Response_ProduceAck{

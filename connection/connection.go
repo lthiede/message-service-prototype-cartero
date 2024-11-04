@@ -87,6 +87,7 @@ func (c *Connection) handleRequests() {
 				// p.AliveLock.RUnlock()
 				numMessages := uint32(len(produceReq.EndOffsetsExclusively))
 				numBytes := req.ProduceRequest.EndOffsetsExclusively[numMessages-1]
+				c.logger.Info("Reading payload", zap.Uint32("numMessages", numMessages), zap.Uint32("numBytes", numBytes))
 				payload := make([]byte, numBytes)
 				for i := 0; i < int(numBytes); {
 					n, err := c.conn.Read(payload[i:])

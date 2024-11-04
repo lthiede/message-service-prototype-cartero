@@ -139,6 +139,7 @@ func (p *Producer) sendBatch() error {
 	}
 	p.connWriteMutex.Unlock()
 	p.batchId++
+	p.endOffsetsExclusively = nil
 	p.messages = nil
 	p.payloadSize = 0
 	return nil

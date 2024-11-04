@@ -22,8 +22,6 @@ type Partition struct {
 	LogInteractionTask chan LogInteractionTask
 	logClient          *logclient.ClientWrapper
 	logger             *zap.Logger
-	newCommittedLSN    chan uint64
-	outstandingAcks    chan outstandingAck
 	nextLSNCommitted   atomic.Uint64 // initialized to default value 0
 	quit               chan struct{}
 }
@@ -68,13 +66,10 @@ func New(name string, logAddresses []string, logger *zap.Logger) (*Partition, er
 		Alive:              true,
 		LogInteractionTask: make(chan LogInteractionTask),
 		quit:               make(chan struct{}),
-		newCommittedLSN:    make(chan uint64),
-		outstandingAcks:    make(chan outstandingAck, 2),
 		logClient:          logClient,
 		logger:             logger,
 	}
 	go p.logInteractions()
-	go p.handleAcks()
 	return p, nil
 }
 
@@ -92,6 +87,9 @@ func (p *Partition) schedulePollCommitted() {
 func (p *Partition) logInteractions() {
 	p.logger.Info("Start handling produce", zap.String("partitionName", p.Name))
 	checkScheduled := false
+	outstandingAcks := [logclient.MaxOutstanding]outstandingAck{}
+	outstandingAckWriteIndex := 0
+	outstandingAckReadIndex := 0
 	var lsnAfterLSNForNextAck uint64
 	for {
 		lit, ok := <-p.LogInteractionTask
@@ -106,7 +104,7 @@ func (p *Partition) logInteractions() {
 				checkScheduled = true
 			}
 			numMessages := uint32(len(ar.EndOffsetsExclusively))
-			p.outstandingAcks <- outstandingAck{
+			outstandingAcks[outstandingAckWriteIndex] = outstandingAck{
 				ack: &pb.ProduceAck{
 					BatchId:       ar.BatchId,
 					NumMessages:   numMessages,
@@ -115,6 +113,7 @@ func (p *Partition) logInteractions() {
 				},
 				produceResponse: ar.ProduceResponse,
 			}
+			outstandingAckWriteIndex = (outstandingAckWriteIndex + 1) % logclient.MaxOutstanding
 			lsnAfterLSNForNextAck += uint64(numMessages)
 			var lastEndOffsetExclusively uint32
 			for _, endOffsetExclusively := range ar.EndOffsetsExclusively {
@@ -124,21 +123,15 @@ func (p *Partition) logInteractions() {
 						lastEndOffsetExclusively = endOffsetExclusively
 						break
 					}
-					committedLSN, pollCommittedErr := p.logClient.PollCompletion()
-					if pollCommittedErr != nil {
-						p.logger.Error("Error polling for committed lsn", zap.Error(pollCommittedErr), zap.String("partitionName", p.Name))
-						continue
-					}
-					p.newCommittedLSN <- committedLSN
+					p.pollCommitted(outstandingAcks[outstandingAckReadIndex])
 				}
 			}
 		} else if lit.pollCommittedRequest != nil {
 			checkScheduled = false
-			committedLSN, pollCommittedErr := p.logClient.PollCompletion()
-			if pollCommittedErr != nil {
-				p.logger.Error("Error polling for committed lsn", zap.Error(pollCommittedErr), zap.String("partitionName", p.Name))
+			committedLSN, err := p.pollCommitted(outstandingAcks[outstandingAckReadIndex])
+			if err != nil {
+				continue
 			}
-			p.newCommittedLSN <- committedLSN
 			if committedLSN < uint64(lsnAfterLSNForNextAck-1) {
 				go p.schedulePollCommitted()
 				checkScheduled = true
@@ -147,31 +140,21 @@ func (p *Partition) logInteractions() {
 	}
 }
 
-func (p *Partition) handleAcks() {
-	p.logger.Info("Start handling acks", zap.String("partitionName", p.Name))
-	for {
-		nextAck, ok := <-p.outstandingAcks
-		if !ok {
-			p.logger.Info("Stop handling acks", zap.String("partitionName", p.Name))
-			return
-		}
-		for {
-			committedLSN, ok := <-p.newCommittedLSN
-			if !ok {
-				p.logger.Info("Stop handling acks", zap.String("partitionName", p.Name))
-				return
-			}
-			if committedLSN+1 >= nextAck.ack.StartLsn+uint64(nextAck.ack.NumMessages) {
-				nextAck.produceResponse <- &pb.Response{
-					Response: &pb.Response_ProduceAck{
-						ProduceAck: nextAck.ack,
-					},
-				}
-				p.nextLSNCommitted.Store(committedLSN + 1)
-				break
-			}
+func (p *Partition) pollCommitted(outstandingAck outstandingAck) (uint64, error) {
+	committedLSN, pollCommittedErr := p.logClient.PollCompletion()
+	if pollCommittedErr != nil {
+		p.logger.Error("Error polling for committed lsn", zap.Error(pollCommittedErr), zap.String("partitionName", p.Name))
+		return 0, pollCommittedErr
+	}
+	if committedLSN+1 >= outstandingAck.ack.StartLsn+uint64(outstandingAck.ack.NumMessages) {
+		outstandingAck.produceResponse <- &pb.Response{
+			Response: &pb.Response_ProduceAck{
+				ProduceAck: outstandingAck.ack,
+			},
 		}
 	}
+	p.nextLSNCommitted.Store(committedLSN + 1)
+	return committedLSN, nil
 }
 
 func (p *Partition) NextLSN() uint64 {

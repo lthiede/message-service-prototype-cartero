@@ -84,21 +84,19 @@ func (c *Connection) handleRequests() {
 				// 	}
 				// }
 				// p.AliveLock.RUnlock()
-				for i := 0; i < len(produceReq.Messages.Messages); i += 128 {
-					numMessages := uint32(min(len(produceReq.Messages.Messages), i+128) - i)
-					c.responses <- &pb.Response{
-						Response: &pb.Response_ProduceAck{
-							ProduceAck: &pb.ProduceAck{
-								BatchId:        produceReq.BatchId,
-								StartMessageId: uint32(i),
-								NumMessages:    numMessages,
-								PartitionName:  produceReq.PartitionName,
-								StartLsn:       lsn,
-							},
+				numMessages := uint32(len(produceReq.Messages.Messages))
+				c.responses <- &pb.Response{
+					Response: &pb.Response_ProduceAck{
+						ProduceAck: &pb.ProduceAck{
+							BatchId:        produceReq.BatchId,
+							StartMessageId: uint32(0),
+							NumMessages:    numMessages,
+							PartitionName:  produceReq.PartitionName,
+							StartLsn:       lsn,
 						},
-					}
-					lsn += uint64(numMessages)
+					},
 				}
+				lsn += uint64(numMessages)
 			case *pb.Request_ConsumeRequest:
 				consumeReq := req.ConsumeRequest
 				p, ok := c.partitionCache[consumeReq.PartitionName]

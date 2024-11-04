@@ -22,6 +22,7 @@ import (
 type Client struct {
 	logger                     *zap.Logger
 	Conn                       net.Conn
+	connWriteMutex             sync.Mutex
 	producers                  map[string]*Producer
 	producersRWMutex           sync.RWMutex
 	consumers                  map[string]*Consumer

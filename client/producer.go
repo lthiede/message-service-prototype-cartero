@@ -11,7 +11,6 @@ import (
 	pb "github.com/lthiede/cartero/proto"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/encoding/protodelim"
-	"google.golang.org/protobuf/proto"
 )
 
 var MaxPublishDelay = 50 * time.Millisecond
@@ -21,9 +20,12 @@ var MaxMessageSize = 3800
 type Producer struct {
 	client                *Client
 	conn                  net.Conn
+	connWriteMutex        *sync.Mutex
 	logger                *zap.Logger
 	partitionName         string
 	messages              [][]byte
+	endOffsetsExclusively []uint32
+	payloadSize           uint32
 	epoch                 int
 	lock                  sync.Mutex
 	batchId               uint64        // implicitly starts at 0
@@ -55,6 +57,7 @@ func (client *Client) NewProducer(partitionName string, ReturnAcksOnChan bool) (
 	p = &Producer{
 		client:           client,
 		conn:             client.Conn,
+		connWriteMutex:   &client.connWriteMutex,
 		logger:           client.logger,
 		partitionName:    partitionName,
 		messages:         make([][]byte, 0, 137),
@@ -77,7 +80,7 @@ func (p *Producer) AddBatch(message []byte) error {
 	}
 	p.lock.Lock()
 	defer p.lock.Unlock()
-	if len(p.messages) > 137 && p.addedMessageBatchSize(message) > MaxBatchSize {
+	if int(p.payloadSize)+len(message) > MaxBatchSize {
 		err := p.sendBatch()
 		if err != nil {
 			return fmt.Errorf("failed to send batch: %v", err)
@@ -85,6 +88,8 @@ func (p *Producer) AddBatch(message []byte) error {
 		p.epoch++
 	}
 	p.messages = append(p.messages, message)
+	p.payloadSize += uint32(len(message))
+	p.endOffsetsExclusively = append(p.endOffsetsExclusively, p.payloadSize)
 	if len(p.messages) == 1 {
 		go p.scheduleSend(p.epoch)
 	}
@@ -106,19 +111,13 @@ func (p *Producer) scheduleSend(epoch int) {
 	}
 }
 
-func (p *Producer) addedMessageBatchSize(newMessage []byte) int {
-	return proto.Size(&pb.Messages{
-		Messages: append(p.messages, newMessage),
-	})
-}
-
 func (p *Producer) sendBatch() error {
 	req := &pb.Request{
 		Request: &pb.Request_ProduceRequest{
 			ProduceRequest: &pb.ProduceRequest{
-				BatchId:       p.batchId,
-				PartitionName: p.partitionName,
-				Messages:      &pb.Messages{Messages: p.messages},
+				BatchId:               p.batchId,
+				PartitionName:         p.partitionName,
+				EndOffsetsExclusively: p.endOffsetsExclusively,
 			},
 		},
 	}
@@ -127,12 +126,20 @@ func (p *Producer) sendBatch() error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal batch: %v", err)
 	}
+	p.connWriteMutex.Lock()
 	_, err = p.conn.Write(wireMessage.Bytes())
 	if err != nil {
-		return fmt.Errorf("failed to send bytes over wire: %v", err)
+		return fmt.Errorf("failed to send produce request over wire: %v", err)
+	}
+	for _, message := range p.messages {
+		_, err = p.conn.Write(message)
+		if err != nil {
+			return fmt.Errorf("Failed to send produce payload over wire: %v", err)
+		}
 	}
 	p.batchId++
 	p.messages = nil
+	p.payloadSize = 0
 	return nil
 }
 

@@ -29,10 +29,12 @@ func (c *Client) CreatePartition(partitionName string) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal create partition request, partition %s: %v", partitionName, err)
 	}
+	c.connWriteMutex.Lock()
 	_, err = c.Conn.Write(wireMessage.Bytes())
 	if err != nil {
 		return fmt.Errorf("failed to send create partition request, partition %s: %v", partitionName, err)
 	}
+	c.connWriteMutex.Unlock()
 	successful := <-successChan
 	delete(c.expectedCreatePartitionRes, partitionName)
 	if !successful {

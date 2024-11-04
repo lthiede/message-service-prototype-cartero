@@ -52,10 +52,12 @@ func (client *Client) NewConsumer(partitionName string, startLSN uint64) (*Consu
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal register consumer request: %v", err)
 	}
+	client.connWriteMutex.Lock()
 	_, err = consumer.conn.Write(wireMessage.Bytes())
 	if err != nil {
 		return nil, fmt.Errorf("failed to register consumer: %v", err)
 	}
+	client.connWriteMutex.Unlock()
 	client.logger.Info("Registered consumer", zap.String("partitionName", partitionName), zap.Int("startLSN", int(startLSN)))
 	return consumer, nil
 }

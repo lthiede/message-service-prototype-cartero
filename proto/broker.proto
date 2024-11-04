@@ -15,11 +15,7 @@ message Request {
 message ProduceRequest {
     uint64 batch_id = 1;
     string partition_name = 2;
-    Messages messages = 3;
-}
-
-message Messages {
-    repeated bytes messages = 1;
+    repeated uint32 end_offsets_exclusively = 3;
 }
 
 message ConsumeRequest {

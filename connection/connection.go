@@ -84,7 +84,16 @@ func (c *Connection) handleRequests() {
 				// 	}
 				// }
 				// p.AliveLock.RUnlock()
-				numMessages := uint32(len(produceReq.Messages.Messages))
+				numMessages := uint32(len(produceReq.EndOffsetsExclusively))
+				payload := make([]byte, req.ProduceRequest.EndOffsetsExclusively[numMessages-1])
+				var i uint32
+				for i < numMessages {
+					n, err := c.conn.Read(payload[i:])
+					if err != nil {
+						c.logger.Error("Failed to read payload", zap.Error(err))
+					}
+					i += uint32(n)
+				}
 				c.responses <- &pb.Response{
 					Response: &pb.Response_ProduceAck{
 						ProduceAck: &pb.ProduceAck{

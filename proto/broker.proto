@@ -38,7 +38,6 @@ message Response {
 
 message ProduceAck {
     uint64 batch_id = 1;
-    uint32 start_message_id = 2;
     uint32 num_messages = 3;
     uint64 start_lsn = 4;
     string partition_name = 5;

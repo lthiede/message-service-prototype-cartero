@@ -46,6 +46,8 @@ func (n *stringSlice) Set(value string) error {
 // 3 clients sent 1052167 messages on 3 channels in 10 seconds; message rate 105216 msg/s; bw 399823460 B/s
 // with ack per batch, through partition and payload outside of proto
 // 3 clients sent 1293554 messages on 3 channels in 10 seconds; message rate 129355 msg/s; bw 491550520 B/s
+// ack per batch, through partition, separate payload, no ack go routine
+// 3 clients sent 1608517 messages on 3 channels in 10 seconds; message rate 160851 msg/s; bw 611236460 B/s
 func main() {
 	flag.Var(&logAddressFlag, "o", "addresses of log nodes")
 	flag.Parse()

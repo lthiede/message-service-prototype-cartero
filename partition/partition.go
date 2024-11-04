@@ -20,6 +20,7 @@ type Partition struct {
 	Alive              bool
 	AliveLock          sync.RWMutex
 	LogInteractionTask chan LogInteractionTask
+	acks               chan outstandingAck
 	logClient          *logclient.ClientWrapper
 	logger             *zap.Logger
 	nextLSNCommitted   atomic.Uint64 // initialized to default value 0
@@ -64,12 +65,14 @@ func New(name string, logAddresses []string, logger *zap.Logger) (*Partition, er
 	p := &Partition{
 		Name:               name,
 		Alive:              true,
+		acks:               make(chan outstandingAck, logclient.MaxOutstanding),
 		LogInteractionTask: make(chan LogInteractionTask),
 		quit:               make(chan struct{}),
 		logClient:          logClient,
 		logger:             logger,
 	}
 	go p.logInteractions()
+	go p.sendAcks()
 	return p, nil
 }
 
@@ -140,6 +143,21 @@ func (p *Partition) logInteractions() {
 	}
 }
 
+func (p *Partition) sendAcks() {
+	for {
+		ack, ok := <-p.acks
+		if !ok {
+			p.logger.Info("Stop sending acks", zap.String("partitionName", p.Name))
+			return
+		}
+		ack.produceResponse <- &pb.Response{
+			Response: &pb.Response_ProduceAck{
+				ProduceAck: ack.ack,
+			},
+		}
+	}
+}
+
 func (p *Partition) pollCommitted(outstandingAck outstandingAck) (uint64, error) {
 	committedLSN, pollCommittedErr := p.logClient.PollCompletion()
 	if pollCommittedErr != nil {
@@ -147,11 +165,7 @@ func (p *Partition) pollCommitted(outstandingAck outstandingAck) (uint64, error)
 		return 0, pollCommittedErr
 	}
 	if committedLSN+1 >= outstandingAck.ack.StartLsn+uint64(outstandingAck.ack.NumMessages) {
-		outstandingAck.produceResponse <- &pb.Response{
-			Response: &pb.Response_ProduceAck{
-				ProduceAck: outstandingAck.ack,
-			},
-		}
+		p.acks <- outstandingAck
 	}
 	p.nextLSNCommitted.Store(committedLSN + 1)
 	return committedLSN, nil

@@ -34,9 +34,10 @@ type LogInteractionTask struct {
 }
 
 type AppendMessageRequest struct {
-	BatchId         uint64
-	Messages        [][]byte
-	ProduceResponse chan *pb.Response
+	BatchId               uint64
+	EndOffsetsExclusively []uint32
+	Payload               []byte
+	ProduceResponse       chan *pb.Response
 }
 
 type outstandingAck struct {
@@ -105,9 +106,10 @@ func (p *Partition) logInteractions() {
 				go p.schedulePollCommitted()
 				checkScheduled = true
 			}
-			for i, message := range ar.Messages {
+			var lastEndOffsetExclusively uint32
+			for i, endOffsetExclusively := range ar.EndOffsetsExclusively {
 				for {
-					lsn, appendErr := p.logClient.AppendAsync(message)
+					lsn, appendErr := p.logClient.AppendAsync(ar.Payload[lastEndOffsetExclusively:endOffsetExclusively])
 					if appendErr == nil {
 						nextLSNAppended = lsn + 1
 						p.outstandingAcks <- &outstandingAck{
@@ -123,6 +125,7 @@ func (p *Partition) logInteractions() {
 						continue
 					}
 					p.newCommittedLSN <- committedLSN
+					lastEndOffsetExclusively = endOffsetExclusively
 				}
 			}
 		} else if lit.pollCommittedRequest != nil {

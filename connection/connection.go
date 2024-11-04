@@ -44,7 +44,6 @@ func New(conn net.Conn, partitionManager *partitionmanager.PartitionManager, log
 }
 
 func (c *Connection) handleRequests() {
-	var lsn uint64
 	for {
 		select {
 		case <-c.quit:
@@ -62,31 +61,8 @@ func (c *Connection) handleRequests() {
 			case *pb.Request_ProduceRequest:
 				c.logger.Info("Got a produce request")
 				produceReq := req.ProduceRequest
-				// p, ok := c.partitionCache[produceReq.PartitionName]
-				// if !ok {
-				// 	p, err = c.partitionManager.GetPartition(produceReq.PartitionName)
-				// 	if err != nil {
-				// 		c.logger.Error("Error getting partition", zap.Error(err))
-				// 		continue
-				// 	}
-				// 	c.partitionCache[produceReq.PartitionName] = p
-				// }
-				// p.AliveLock.RLock()
-				// if !p.Alive {
-				// 	delete(c.partitionCache, produceReq.PartitionName)
-				// 	c.logger.Error("Produce request to dead partition", zap.String("partitionName", produceReq.PartitionName), zap.Uint64("batchId", produceReq.BatchId))
-				// } else {
-				// 	p.LogInteractionTask <- partition.LogInteractionTask{
-				// 		AppendMessageRequest: &partition.AppendMessageRequest{
-				// 			BatchId:         produceReq.BatchId,
-				// 			Messages:        produceReq.Messages.Messages,
-				// 			ProduceResponse: c.responses,
-				// 		},
-				// 	}
-				// }
-				// p.AliveLock.RUnlock()
 				numMessages := uint32(len(produceReq.EndOffsetsExclusively))
-				numBytes := req.ProduceRequest.EndOffsetsExclusively[numMessages-1]
+				numBytes := produceReq.EndOffsetsExclusively[numMessages-1]
 				payload := make([]byte, numBytes)
 				for i := 0; i < int(numBytes); {
 					n, err := c.conn.Read(payload[i:])
@@ -94,23 +70,30 @@ func (c *Connection) handleRequests() {
 					}
 					i += n
 				}
-				var i uint32
-				for i = 0; i < numMessages; i += 128 {
-					numMessagesAck := min(i+128, numMessages) - i
-					c.responses <- &pb.Response{
-						Response: &pb.Response_ProduceAck{
-							ProduceAck: &pb.ProduceAck{
-								BatchId:        produceReq.BatchId,
-								StartMessageId: uint32(0),
-								NumMessages:    numMessagesAck,
-								PartitionName:  produceReq.PartitionName,
-								StartLsn:       lsn,
-							},
+				p, ok := c.partitionCache[produceReq.PartitionName]
+				if !ok {
+					p, err = c.partitionManager.GetPartition(produceReq.PartitionName)
+					if err != nil {
+						c.logger.Error("Error getting partition", zap.Error(err))
+						continue
+					}
+					c.partitionCache[produceReq.PartitionName] = p
+				}
+				p.AliveLock.RLock()
+				if !p.Alive {
+					delete(c.partitionCache, produceReq.PartitionName)
+					c.logger.Error("Produce request to dead partition", zap.String("partitionName", produceReq.PartitionName), zap.Uint64("batchId", produceReq.BatchId))
+				} else {
+					p.LogInteractionTask <- partition.LogInteractionTask{
+						AppendMessageRequest: &partition.AppendMessageRequest{
+							BatchId:               produceReq.BatchId,
+							EndOffsetsExclusively: produceReq.EndOffsetsExclusively,
+							Payload:               payload,
+							ProduceResponse:       c.responses,
 						},
 					}
 				}
-
-				lsn += uint64(len(produceReq.EndOffsetsExclusively))
+				p.AliveLock.RUnlock()
 			case *pb.Request_ConsumeRequest:
 				consumeReq := req.ConsumeRequest
 				p, ok := c.partitionCache[consumeReq.PartitionName]

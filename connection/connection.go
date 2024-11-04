@@ -88,14 +88,13 @@ func (c *Connection) handleRequests() {
 				numMessages := uint32(len(produceReq.EndOffsetsExclusively))
 				c.logger.Info("Trying to read payload", zap.Uint32("payloadSize", req.ProduceRequest.EndOffsetsExclusively[numMessages-1]))
 				payload := make([]byte, req.ProduceRequest.EndOffsetsExclusively[numMessages-1])
-				var i uint32
-				for i < numMessages {
+				for i := 0; i < len(payload); {
 					n, err := c.conn.Read(payload[i:])
 					if err != nil {
 						c.logger.Error("Failed to read payload", zap.Error(err))
 					}
-					i += uint32(n)
-					c.logger.Info("Read payload bytes", zap.Int("read", n), zap.Uint32("total", i))
+					i += n
+					c.logger.Info("Read payload bytes", zap.Int("read", n), zap.Int("total", i))
 				}
 				c.responses <- &pb.Response{
 					Response: &pb.Response_ProduceAck{

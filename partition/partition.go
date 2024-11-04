@@ -117,6 +117,7 @@ func (p *Partition) logInteractions() {
 							MessageId:       uint32(i),
 							ProduceResponse: ar.ProduceResponse,
 						}
+						lastEndOffsetExclusively = endOffsetExclusively
 						break
 					}
 					committedLSN, pollCommittedErr := p.logClient.PollCompletion()
@@ -125,7 +126,6 @@ func (p *Partition) logInteractions() {
 						continue
 					}
 					p.newCommittedLSN <- committedLSN
-					lastEndOffsetExclusively = endOffsetExclusively
 				}
 			}
 		} else if lit.pollCommittedRequest != nil {

@@ -105,7 +105,7 @@ func (p *Partition) logInteractions() {
 				go p.schedulePollCommitted()
 				checkScheduled = true
 			}
-			numMessages := ar.EndOffsetsExclusively[len(ar.EndOffsetsExclusively)-1]
+			numMessages := uint32(len(ar.EndOffsetsExclusively))
 			p.outstandingAcks <- outstandingAck{
 				ack: &pb.ProduceAck{
 					BatchId:       ar.BatchId,

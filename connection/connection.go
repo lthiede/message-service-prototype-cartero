@@ -59,7 +59,6 @@ func (c *Connection) handleRequests() {
 			}
 			switch req := request.Request.(type) {
 			case *pb.Request_ProduceRequest:
-				c.logger.Info("Got a produce request")
 				produceReq := req.ProduceRequest
 				numMessages := uint32(len(produceReq.EndOffsetsExclusively))
 				numBytes := produceReq.EndOffsetsExclusively[numMessages-1]

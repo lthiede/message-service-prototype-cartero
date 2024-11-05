@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/lthiede/cartero/client"
+	"github.com/lthiede/cartero/server"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -46,9 +47,36 @@ func (n *stringSlice) Set(value string) error {
 // 3 clients sent 1052167 messages on 3 channels in 10 seconds; message rate 105216 msg/s; bw 399823460 B/s
 // with ack per batch, through partition and payload outside of proto
 // 3 clients sent 1293554 messages on 3 channels in 10 seconds; message rate 129355 msg/s; bw 491550520 B/s
+// ack per batch, through partition, separate payload, no ack go routine
+// 3 clients sent 1608517 messages on 3 channels in 10 seconds; message rate 160851 msg/s; bw 611236460 B/s
+
+// longer experiments starting here
+// ack per batch, through partition, separate payload, lightweight ack go routine, bug in acks
+// 3 clients sent 22005625 messages on 3 channels in 120 seconds; message rate 183380 msg/s; bw 696844791 B/s
+// ack per batch, through partition, separate payload, lightweight ack go routine, bug in acks fixed
+// 3 clients sent 7458691 messages on 3 channels in 60 seconds; message rate 124311 msg/s; bw 472383763 B/s
+// ack per batch, through partition, separate payload, no ack go routine, bug in acks fixed
+// 3 clients sent 14786821 messages on 3 channels in 120 seconds; message rate 123223 msg/s; bw 468249331 B/s
+// ack per batch, through partition, separate payload, ack go routine, no actual log interactions
+// 3 clients sent 36990274 messages on 3 channels in 120 seconds; message rate 308252 msg/s; bw 1171358676 B/s
+// back to 3 ack per batch, through partition, separate payload, no ack go routine
+// 3 clients sent 19935555 messages on 3 channels in 120 seconds; message rate 166129 msg/s; bw 631292575 B/s
 func main() {
 	flag.Var(&logAddressFlag, "o", "addresses of log nodes")
 	flag.Parse()
+	if *bFlag {
+		logger, err := zap.NewDevelopment()
+		if err != nil {
+			fmt.Printf("Failed to create logger: %v", err)
+			return
+		}
+		server, err := server.New([]string{}, *sFlag, *&logAddressFlag, logger)
+		if err != nil {
+			fmt.Printf("Failed to create server: %v", err)
+			return
+		}
+		defer server.Close()
+	}
 	partitionNames := make([]string, 0, *pFlag)
 	for i := range *pFlag {
 		partitionNames = append(partitionNames, fmt.Sprintf("partition%d", i))

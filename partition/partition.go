@@ -21,7 +21,7 @@ type Partition struct {
 	AliveLock                sync.RWMutex
 	LogInteractionTask       chan LogInteractionTask
 	acks                     chan outstandingAck
-	outstandingAcks          [logclient.MaxOutstanding]outstandingAck
+	outstandingAcks          []outstandingAck
 	outstandingAckWriteIndex int
 	outstandingAckReadIndex  int
 	logClient                *logclient.ClientWrapper
@@ -69,7 +69,7 @@ func New(name string, logAddresses []string, logger *zap.Logger) (*Partition, er
 		Name:               name,
 		Alive:              true,
 		acks:               make(chan outstandingAck, logclient.MaxOutstanding),
-		outstandingAcks:    [logclient.MaxOutstanding]outstandingAck{},
+		outstandingAcks:    make([]outstandingAck, logclient.MaxOutstanding+1),
 		LogInteractionTask: make(chan LogInteractionTask),
 		quit:               make(chan struct{}),
 		logClient:          logClient,
@@ -118,7 +118,7 @@ func (p *Partition) logInteractions() {
 				},
 				produceResponse: ar.ProduceResponse,
 			}
-			p.outstandingAckWriteIndex = (p.outstandingAckWriteIndex + 1) % logclient.MaxOutstanding
+			p.outstandingAckWriteIndex = (p.outstandingAckWriteIndex + 1) % (logclient.MaxOutstanding + 1)
 			lsnAfterLSNForNextAck += uint64(numMessages)
 			var lastEndOffsetExclusively uint32
 			for _, endOffsetExclusively := range ar.EndOffsetsExclusively {
@@ -145,6 +145,22 @@ func (p *Partition) logInteractions() {
 	}
 }
 
+func (p *Partition) pollCommitted() (uint64, error) {
+	committedLSN, pollCommittedErr := p.logClient.PollCompletion()
+	if pollCommittedErr != nil {
+		p.logger.Error("Error polling for committed lsn", zap.Error(pollCommittedErr), zap.String("partitionName", p.Name))
+		return 0, pollCommittedErr
+	}
+	outstandingAck := p.outstandingAcks[p.outstandingAckReadIndex]
+	for committedLSN+1 >= outstandingAck.ack.StartLsn+uint64(outstandingAck.ack.NumMessages) {
+		p.acks <- outstandingAck
+		p.outstandingAckReadIndex = (p.outstandingAckReadIndex + 1) % (logclient.MaxOutstanding + 1)
+		outstandingAck = p.outstandingAcks[p.outstandingAckReadIndex]
+	}
+	p.nextLSNCommitted.Store(committedLSN + 1)
+	return committedLSN, nil
+}
+
 func (p *Partition) sendAcks() {
 	for {
 		ack, ok := <-p.acks
@@ -158,22 +174,6 @@ func (p *Partition) sendAcks() {
 			},
 		}
 	}
-}
-
-func (p *Partition) pollCommitted() (uint64, error) {
-	committedLSN, pollCommittedErr := p.logClient.PollCompletion()
-	if pollCommittedErr != nil {
-		p.logger.Error("Error polling for committed lsn", zap.Error(pollCommittedErr), zap.String("partitionName", p.Name))
-		return 0, pollCommittedErr
-	}
-	outstandingAck := p.outstandingAcks[p.outstandingAckReadIndex]
-	for committedLSN+1 >= outstandingAck.ack.StartLsn+uint64(outstandingAck.ack.NumMessages) {
-		p.acks <- outstandingAck
-		p.outstandingAckReadIndex = (p.outstandingAckReadIndex + 1) % logclient.MaxOutstanding
-		outstandingAck = p.outstandingAcks[p.outstandingAckReadIndex]
-	}
-	p.nextLSNCommitted.Store(committedLSN + 1)
-	return committedLSN, nil
 }
 
 func (p *Partition) NextLSN() uint64 {

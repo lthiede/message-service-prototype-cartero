@@ -16,14 +16,17 @@ import (
 const MaxMessageSize = 3800
 
 type Partition struct {
-	Name               string
-	Alive              bool
-	AliveLock          sync.RWMutex
-	LogInteractionTask chan LogInteractionTask
-	logClient          *logclient.ClientWrapper
-	logger             *zap.Logger
-	nextLSNCommitted   atomic.Uint64 // initialized to default value 0
-	quit               chan struct{}
+	Name                     string
+	Alive                    bool
+	AliveLock                sync.RWMutex
+	LogInteractionTask       chan LogInteractionTask
+	logClient                *logclient.ClientWrapper
+	outstandingAcks          []outstandingAck
+	outstandingAckWriteIndex int
+	outstandingAckReadIndex  int
+	logger                   *zap.Logger
+	nextLSNCommitted         atomic.Uint64 // initialized to default value 0
+	quit                     chan struct{}
 }
 
 type LogInteractionTask struct {
@@ -64,6 +67,7 @@ func New(name string, logAddresses []string, logger *zap.Logger) (*Partition, er
 	p := &Partition{
 		Name:               name,
 		Alive:              true,
+		outstandingAcks:    make([]outstandingAck, logclient.MaxOutstanding+1),
 		LogInteractionTask: make(chan LogInteractionTask),
 		quit:               make(chan struct{}),
 		logClient:          logClient,
@@ -87,9 +91,6 @@ func (p *Partition) schedulePollCommitted() {
 func (p *Partition) logInteractions() {
 	p.logger.Info("Start handling produce", zap.String("partitionName", p.Name))
 	checkScheduled := false
-	outstandingAcks := [logclient.MaxOutstanding]outstandingAck{}
-	outstandingAckWriteIndex := 0
-	outstandingAckReadIndex := 0
 	var lsnAfterLSNForNextAck uint64
 	for {
 		lit, ok := <-p.LogInteractionTask
@@ -104,7 +105,7 @@ func (p *Partition) logInteractions() {
 				checkScheduled = true
 			}
 			numMessages := uint32(len(ar.EndOffsetsExclusively))
-			outstandingAcks[outstandingAckWriteIndex] = outstandingAck{
+			p.outstandingAcks[p.outstandingAckWriteIndex] = outstandingAck{
 				ack: &pb.ProduceAck{
 					BatchId:       ar.BatchId,
 					NumMessages:   numMessages,
@@ -113,7 +114,7 @@ func (p *Partition) logInteractions() {
 				},
 				produceResponse: ar.ProduceResponse,
 			}
-			outstandingAckWriteIndex = (outstandingAckWriteIndex + 1) % logclient.MaxOutstanding
+			p.outstandingAckWriteIndex = (p.outstandingAckWriteIndex + 1) % (logclient.MaxOutstanding + 1)
 			lsnAfterLSNForNextAck += uint64(numMessages)
 			var lastEndOffsetExclusively uint32
 			for _, endOffsetExclusively := range ar.EndOffsetsExclusively {
@@ -123,12 +124,12 @@ func (p *Partition) logInteractions() {
 						lastEndOffsetExclusively = endOffsetExclusively
 						break
 					}
-					p.pollCommitted(outstandingAcks[outstandingAckReadIndex])
+					p.pollCommitted()
 				}
 			}
 		} else if lit.pollCommittedRequest != nil {
 			checkScheduled = false
-			committedLSN, err := p.pollCommitted(outstandingAcks[outstandingAckReadIndex])
+			committedLSN, err := p.pollCommitted()
 			if err != nil {
 				continue
 			}
@@ -140,18 +141,20 @@ func (p *Partition) logInteractions() {
 	}
 }
 
-func (p *Partition) pollCommitted(outstandingAck outstandingAck) (uint64, error) {
+func (p *Partition) pollCommitted() (uint64, error) {
 	committedLSN, pollCommittedErr := p.logClient.PollCompletion()
 	if pollCommittedErr != nil {
 		p.logger.Error("Error polling for committed lsn", zap.Error(pollCommittedErr), zap.String("partitionName", p.Name))
 		return 0, pollCommittedErr
 	}
-	if committedLSN+1 >= outstandingAck.ack.StartLsn+uint64(outstandingAck.ack.NumMessages) {
+	outstandingAck := p.outstandingAcks[p.outstandingAckReadIndex]
+	for p.outstandingAckReadIndex != p.outstandingAckWriteIndex && committedLSN+1 >= outstandingAck.ack.StartLsn+uint64(outstandingAck.ack.NumMessages) {
 		outstandingAck.produceResponse <- &pb.Response{
 			Response: &pb.Response_ProduceAck{
 				ProduceAck: outstandingAck.ack,
 			},
 		}
+		p.outstandingAckReadIndex = (p.outstandingAckReadIndex + 1) % (logclient.MaxOutstanding + 1)
 	}
 	p.nextLSNCommitted.Store(committedLSN + 1)
 	return committedLSN, nil

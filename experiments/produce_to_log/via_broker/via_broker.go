@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/lthiede/cartero/client"
-	"github.com/lthiede/cartero/server"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -25,6 +24,7 @@ var logAddressFlag stringSlice
 var nFlag = flag.Int("n", 1, "number of concurrent clients")
 var pFlag = flag.Int("p", 1, "number of partitions")
 var sFlag = flag.String("s", "localhost:8080", "server address")
+var bFlag = flag.Bool("b", false, "start server")
 
 func (n *stringSlice) String() string {
 	return fmt.Sprintf("%v", []string(*n))
@@ -64,19 +64,19 @@ func (n *stringSlice) Set(value string) error {
 func main() {
 	flag.Var(&logAddressFlag, "o", "addresses of log nodes")
 	flag.Parse()
-	if *bFlag {
-		logger, err := zap.NewDevelopment()
-		if err != nil {
-			fmt.Printf("Failed to create logger: %v", err)
-			return
-		}
-		server, err := server.New([]string{}, *sFlag, *&logAddressFlag, logger)
-		if err != nil {
-			fmt.Printf("Failed to create server: %v", err)
-			return
-		}
-		defer server.Close()
-	}
+	// if *bFlag {
+	// 	logger, err := zap.NewDevelopment()
+	// 	if err != nil {
+	// 		fmt.Printf("Failed to create logger: %v", err)
+	// 		return
+	// 	}
+	// 	server, err := server.New([]string{}, *sFlag, *&logAddressFlag, logger)
+	// 	if err != nil {
+	// 		fmt.Printf("Failed to create server: %v", err)
+	// 		return
+	// 	}
+	// 	defer server.Close()
+	// }
 	partitionNames := make([]string, 0, *pFlag)
 	for i := range *pFlag {
 		partitionNames = append(partitionNames, fmt.Sprintf("partition%d", i))

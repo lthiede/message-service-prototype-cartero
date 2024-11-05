@@ -16,33 +16,24 @@ import (
 const MaxMessageSize = 3800
 
 type Partition struct {
-	Name                     string
-	Alive                    bool
-	AliveLock                sync.RWMutex
-	LogInteractionTask       chan LogInteractionTask
-	acks                     chan outstandingAck
-	outstandingAcks          []outstandingAck
-	outstandingAckWriteIndex int
-	outstandingAckReadIndex  int
-	logClient                *logclient.ClientWrapper
-	logger                   *zap.Logger
-	nextLSNCommitted         atomic.Uint64 // initialized to default value 0
-	quit                     chan struct{}
+	Name                 string
+	Alive                bool
+	AliveLock            sync.RWMutex
+	AppendBatchRequest   chan AppendBatchRequest
+	outstandingAcks      chan *outstandingAck
+	pollCommittedRequest chan bool
+	logClient            *logclient.ClientWrapper
+	logClientLock        sync.Mutex
+	logger               *zap.Logger
+	nextLSNCommitted     atomic.Uint64 // initialized to default value 0
+	quit                 chan struct{}
 }
 
-type LogInteractionTask struct {
-	AppendMessageRequest *AppendMessageRequest
-	pollCommittedRequest *pollCommittedRequest
-}
-
-type AppendMessageRequest struct {
+type AppendBatchRequest struct {
 	BatchId               uint64
 	EndOffsetsExclusively []uint32
 	Payload               []byte
 	ProduceResponse       chan *pb.Response
-}
-
-type pollCommittedRequest struct {
 }
 
 type outstandingAck struct {
@@ -66,118 +57,120 @@ func New(name string, logAddresses []string, logger *zap.Logger) (*Partition, er
 		return nil, fmt.Errorf("error connecting to log nodes: %v", err)
 	}
 	p := &Partition{
-		Name:               name,
-		Alive:              true,
-		acks:               make(chan outstandingAck, logclient.MaxOutstanding),
-		outstandingAcks:    make([]outstandingAck, logclient.MaxOutstanding+1),
-		LogInteractionTask: make(chan LogInteractionTask),
-		quit:               make(chan struct{}),
-		logClient:          logClient,
-		logger:             logger,
+		Name:                 name,
+		Alive:                true,
+		outstandingAcks:      make(chan *outstandingAck, logclient.MaxOutstanding+1),
+		pollCommittedRequest: make(chan bool),
+		AppendBatchRequest:   make(chan AppendBatchRequest),
+		quit:                 make(chan struct{}),
+		logClient:            logClient,
+		logger:               logger,
 	}
 	go p.logInteractions()
-	go p.sendAcks()
+	go p.handleAcks()
 	return p, nil
 }
 
 var MaxCheckLSNDelay = 50 * time.Millisecond
-
-func (p *Partition) schedulePollCommitted() {
-	time.Sleep(MaxCheckLSNDelay)
-	p.LogInteractionTask <- LogInteractionTask{
-		pollCommittedRequest: &pollCommittedRequest{},
-	}
-}
 
 // TODO: try passing a batch of messages via cgo interface
 // Don't add a channel select to this function
 // Receiving on the channel is not a bottleneck
 func (p *Partition) logInteractions() {
 	p.logger.Info("Start handling produce", zap.String("partitionName", p.Name))
-	checkScheduled := false
-	var lsnSimulation uint64
 	var lsnAfterLSNForNextAck uint64
 	for {
-		lit, ok := <-p.LogInteractionTask
+		abr, ok := <-p.AppendBatchRequest
 		if !ok {
 			p.logger.Info("Stop handling produce", zap.String("partitionName", p.Name))
 			return
 		}
-		if lit.AppendMessageRequest != nil {
-			ar := lit.AppendMessageRequest
-			if !checkScheduled {
-				go p.schedulePollCommitted()
-				checkScheduled = true
-			}
-			numMessages := uint32(len(ar.EndOffsetsExclusively))
-			p.outstandingAcks[p.outstandingAckWriteIndex] = outstandingAck{
-				ack: &pb.ProduceAck{
-					BatchId:       ar.BatchId,
-					NumMessages:   numMessages,
-					StartLsn:      lsnAfterLSNForNextAck,
-					PartitionName: p.Name,
-				},
-				produceResponse: ar.ProduceResponse,
-			}
-			p.outstandingAckWriteIndex = (p.outstandingAckWriteIndex + 1) % (logclient.MaxOutstanding + 1)
-			lsnAfterLSNForNextAck += uint64(numMessages)
-			// var lastEndOffsetExclusively uint32
-			// for _, endOffsetExclusively := range ar.EndOffsetsExclusively {
-			for range ar.EndOffsetsExclusively {
-				polled := false
-				for {
-					// _, appendErr := p.logClient.AppendAsync(ar.Payload[lastEndOffsetExclusively:endOffsetExclusively])
-					// if appendErr == nil {
-					if (lsnSimulation+1)%logclient.MaxOutstanding != 0 || polled {
-						lsnSimulation++
-						// lastEndOffsetExclusively = endOffsetExclusively
-						break
-					}
-					polled = true
-					p.pollCommitted(lsnSimulation)
+		numMessages := uint32(len(abr.EndOffsetsExclusively))
+		p.outstandingAcks <- &outstandingAck{
+			ack: &pb.ProduceAck{
+				BatchId:       abr.BatchId,
+				NumMessages:   numMessages,
+				StartLsn:      lsnAfterLSNForNextAck,
+				PartitionName: p.Name,
+			},
+			produceResponse: abr.ProduceResponse,
+		}
+		lsnAfterLSNForNextAck += uint64(numMessages)
+		var lastEndOffsetExclusively uint32
+		for _, endOffsetExclusively := range abr.EndOffsetsExclusively {
+			for {
+				p.logClientLock.Lock()
+				_, appendErr := p.logClient.AppendAsync(abr.Payload[lastEndOffsetExclusively:endOffsetExclusively])
+				p.logClientLock.Unlock()
+				if appendErr == nil {
+					lastEndOffsetExclusively = endOffsetExclusively
+					break
 				}
-			}
-		} else if lit.pollCommittedRequest != nil {
-			checkScheduled = false
-			committedLSN, err := p.pollCommitted(lsnSimulation)
-			if err != nil {
-				continue
-			}
-			if committedLSN < uint64(lsnAfterLSNForNextAck-1) {
-				go p.schedulePollCommitted()
-				checkScheduled = true
+				// this should only be necessary once
+				p.pollCommittedRequest <- false
 			}
 		}
 	}
 }
 
-func (p *Partition) pollCommitted(lsnSimulation uint64) (uint64, error) {
-	// committedLSN, pollCommittedErr := p.logClient.PollCompletion()
-	// if pollCommittedErr != nil {
-	// 	p.logger.Error("Error polling for committed lsn", zap.Error(pollCommittedErr), zap.String("partitionName", p.Name))
-	// 	return 0, pollCommittedErr
-	// }
-	outstandingAck := p.outstandingAcks[p.outstandingAckReadIndex]
-	for p.outstandingAckReadIndex != p.outstandingAckWriteIndex && lsnSimulation+1 >= outstandingAck.ack.StartLsn+uint64(outstandingAck.ack.NumMessages) {
-		p.acks <- outstandingAck
-		p.outstandingAckReadIndex = (p.outstandingAckReadIndex + 1) % (logclient.MaxOutstanding + 1)
-		outstandingAck = p.outstandingAcks[p.outstandingAckReadIndex]
-	}
-	p.nextLSNCommitted.Store(lsnSimulation + 1)
-	return lsnSimulation, nil
+func (p *Partition) scheduleCheck() {
+	go func() {
+		time.Sleep(MaxCheckLSNDelay)
+		p.pollCommittedRequest <- true
+	}()
 }
 
-func (p *Partition) sendAcks() {
+func (p *Partition) handleAcks() {
+	var current *outstandingAck
+	checkScheduled := false
 	for {
-		ack, ok := <-p.acks
+		if current != nil && !checkScheduled {
+			p.scheduleCheck()
+			checkScheduled = true
+		}
+		scheduledCheck, ok := <-p.pollCommittedRequest
 		if !ok {
-			p.logger.Info("Stop sending acks", zap.String("partitionName", p.Name))
+			p.logger.Info("Stop handling acks", zap.String("partitionName", p.Name))
 			return
 		}
-		ack.produceResponse <- &pb.Response{
-			Response: &pb.Response_ProduceAck{
-				ProduceAck: ack.ack,
-			},
+		if scheduledCheck {
+			checkScheduled = false
+		}
+		p.logClientLock.Lock()
+		committedLSN, pollCommittedErr := p.logClient.PollCompletion()
+		p.logClientLock.Unlock()
+		if pollCommittedErr != nil {
+			p.logger.Error("Error polling for committed lsn", zap.Error(pollCommittedErr), zap.String("partitionName", p.Name))
+			continue
+		}
+		if current != nil {
+			if committedLSN+1 >= current.ack.StartLsn+uint64(current.ack.NumMessages) {
+				current.produceResponse <- &pb.Response{
+					Response: &pb.Response_ProduceAck{
+						ProduceAck: current.ack,
+					},
+				}
+				current = nil
+			} else {
+				continue
+			}
+		}
+		for {
+			select {
+			case current = <-p.outstandingAcks:
+				if committedLSN+1 >= current.ack.StartLsn+uint64(current.ack.NumMessages) {
+					current.produceResponse <- &pb.Response{
+						Response: &pb.Response_ProduceAck{
+							ProduceAck: current.ack,
+						},
+					}
+					current = nil
+				} else {
+					break
+				}
+			default:
+				break
+			}
 		}
 	}
 }

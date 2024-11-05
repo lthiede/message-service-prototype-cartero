@@ -10,7 +10,7 @@
             "request": "launch",
             "mode": "auto",
             "program": "./experiments/produce_to_log/via_broker",
-            "args": ["-n", "1", "-o", "127.0.0.1:50000"]
+            "args": ["-n", "3", "-p", "3", "-o", "127.0.0.1:50000", "-b"]
         },
         {
             "name": "Launch Server",

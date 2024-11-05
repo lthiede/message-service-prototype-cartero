@@ -20,6 +20,7 @@ type Partition struct {
 	Alive                    bool
 	AliveLock                sync.RWMutex
 	LogInteractionTask       chan LogInteractionTask
+	acks                     chan outstandingAck
 	outstandingAcks          []outstandingAck
 	outstandingAckWriteIndex int
 	outstandingAckReadIndex  int
@@ -67,6 +68,7 @@ func New(name string, logAddresses []string, logger *zap.Logger) (*Partition, er
 	p := &Partition{
 		Name:               name,
 		Alive:              true,
+		acks:               make(chan outstandingAck, logclient.MaxOutstanding),
 		outstandingAcks:    make([]outstandingAck, logclient.MaxOutstanding+1),
 		LogInteractionTask: make(chan LogInteractionTask),
 		quit:               make(chan struct{}),
@@ -74,6 +76,7 @@ func New(name string, logAddresses []string, logger *zap.Logger) (*Partition, er
 		logger:             logger,
 	}
 	go p.logInteractions()
+	go p.sendAcks()
 	return p, nil
 }
 
@@ -92,6 +95,7 @@ func (p *Partition) schedulePollCommitted() {
 func (p *Partition) logInteractions() {
 	p.logger.Info("Start handling produce", zap.String("partitionName", p.Name))
 	checkScheduled := false
+	var lsnSimulation uint64
 	var lsnAfterLSNForNextAck uint64
 	for {
 		lit, ok := <-p.LogInteractionTask
@@ -117,20 +121,25 @@ func (p *Partition) logInteractions() {
 			}
 			p.outstandingAckWriteIndex = (p.outstandingAckWriteIndex + 1) % (logclient.MaxOutstanding + 1)
 			lsnAfterLSNForNextAck += uint64(numMessages)
-			var lastEndOffsetExclusively uint32
-			for _, endOffsetExclusively := range ar.EndOffsetsExclusively {
+			// var lastEndOffsetExclusively uint32
+			// for _, endOffsetExclusively := range ar.EndOffsetsExclusively {
+			for range ar.EndOffsetsExclusively {
+				polled := false
 				for {
-					_, appendErr := p.logClient.AppendAsync(ar.Payload[lastEndOffsetExclusively:endOffsetExclusively])
-					if appendErr == nil {
-						lastEndOffsetExclusively = endOffsetExclusively
+					// _, appendErr := p.logClient.AppendAsync(ar.Payload[lastEndOffsetExclusively:endOffsetExclusively])
+					// if appendErr == nil {
+					if (lsnSimulation+1)%logclient.MaxOutstanding != 0 || polled {
+						lsnSimulation++
+						// lastEndOffsetExclusively = endOffsetExclusively
 						break
 					}
-					p.pollCommitted()
+					polled = true
+					p.pollCommitted(lsnSimulation)
 				}
 			}
 		} else if lit.pollCommittedRequest != nil {
 			checkScheduled = false
-			committedLSN, err := p.pollCommitted()
+			committedLSN, err := p.pollCommitted(lsnSimulation)
 			if err != nil {
 				continue
 			}
@@ -142,24 +151,35 @@ func (p *Partition) logInteractions() {
 	}
 }
 
-func (p *Partition) pollCommitted() (uint64, error) {
-	committedLSN, pollCommittedErr := p.logClient.PollCompletion()
-	if pollCommittedErr != nil {
-		p.logger.Error("Error polling for committed lsn", zap.Error(pollCommittedErr), zap.String("partitionName", p.Name))
-		return 0, pollCommittedErr
-	}
+func (p *Partition) pollCommitted(lsnSimulation uint64) (uint64, error) {
+	// committedLSN, pollCommittedErr := p.logClient.PollCompletion()
+	// if pollCommittedErr != nil {
+	// 	p.logger.Error("Error polling for committed lsn", zap.Error(pollCommittedErr), zap.String("partitionName", p.Name))
+	// 	return 0, pollCommittedErr
+	// }
 	outstandingAck := p.outstandingAcks[p.outstandingAckReadIndex]
-	for p.outstandingAckReadIndex != p.outstandingAckWriteIndex && committedLSN+1 >= outstandingAck.ack.StartLsn+uint64(outstandingAck.ack.NumMessages) {
-		outstandingAck.produceResponse <- &pb.Response{
-			Response: &pb.Response_ProduceAck{
-				ProduceAck: outstandingAck.ack,
-			},
-		}
+	for p.outstandingAckReadIndex != p.outstandingAckWriteIndex && lsnSimulation+1 >= outstandingAck.ack.StartLsn+uint64(outstandingAck.ack.NumMessages) {
+		p.acks <- outstandingAck
 		p.outstandingAckReadIndex = (p.outstandingAckReadIndex + 1) % (logclient.MaxOutstanding + 1)
 		outstandingAck = p.outstandingAcks[p.outstandingAckReadIndex]
 	}
-	p.nextLSNCommitted.Store(committedLSN + 1)
-	return committedLSN, nil
+	p.nextLSNCommitted.Store(lsnSimulation + 1)
+	return lsnSimulation, nil
+}
+
+func (p *Partition) sendAcks() {
+	for {
+		ack, ok := <-p.acks
+		if !ok {
+			p.logger.Info("Stop sending acks", zap.String("partitionName", p.Name))
+			return
+		}
+		ack.produceResponse <- &pb.Response{
+			Response: &pb.Response_ProduceAck{
+				ProduceAck: ack.ack,
+			},
+		}
+	}
 }
 
 func (p *Partition) NextLSN() uint64 {

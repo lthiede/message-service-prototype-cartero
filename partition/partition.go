@@ -152,7 +152,7 @@ func (p *Partition) pollCommitted() (uint64, error) {
 		return 0, pollCommittedErr
 	}
 	outstandingAck := p.outstandingAcks[p.outstandingAckReadIndex]
-	for committedLSN+1 >= outstandingAck.ack.StartLsn+uint64(outstandingAck.ack.NumMessages) {
+	for p.outstandingAckReadIndex != p.outstandingAckWriteIndex && committedLSN+1 >= outstandingAck.ack.StartLsn+uint64(outstandingAck.ack.NumMessages) {
 		p.acks <- outstandingAck
 		p.outstandingAckReadIndex = (p.outstandingAckReadIndex + 1) % (logclient.MaxOutstanding + 1)
 		outstandingAck = p.outstandingAcks[p.outstandingAckReadIndex]

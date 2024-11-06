@@ -83,11 +83,13 @@ func (c *Connection) handleRequests() {
 					delete(c.partitionCache, produceReq.PartitionName)
 					c.logger.Error("Produce request to dead partition", zap.String("partitionName", produceReq.PartitionName), zap.Uint64("batchId", produceReq.BatchId))
 				} else {
-					p.AppendBatchRequest <- partition.AppendBatchRequest{
-						BatchId:               produceReq.BatchId,
-						EndOffsetsExclusively: produceReq.EndOffsetsExclusively,
-						Payload:               payload,
-						ProduceResponse:       c.responses,
+					p.LogInteractionRequests <- partition.LogInteractionRequest{
+						AppendBatchRequest: &partition.AppendBatchRequest{
+							BatchId:               produceReq.BatchId,
+							EndOffsetsExclusively: produceReq.EndOffsetsExclusively,
+							Payload:               payload,
+							ProduceResponse:       c.responses,
+						},
 					}
 				}
 				p.AliveLock.RUnlock()

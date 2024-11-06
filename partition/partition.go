@@ -30,6 +30,7 @@ type Partition struct {
 
 type LogInteractionRequest struct {
 	AppendBatchRequest   *AppendBatchRequest
+	flushBatchRequest    *struct{}
 	pollCommittedRequest *struct{}
 }
 
@@ -76,13 +77,19 @@ func New(name string, logAddresses []string, logger *zap.Logger) (*Partition, er
 }
 
 var MaxCheckLSNDelay = 50 * time.Millisecond
+var MaxFlushBatchDelay = 5 * time.Millisecond
 
-// TODO: try passing a batch of messages via cgo interface
+// TODO: continue with changes to segmentstore
+// TODO: build segmentstore in release mode
 // Don't add a channel select to this function
 // Receiving on the channel is not a bottleneck
 func (p *Partition) logInteractions() {
 	p.logger.Info("Start handling produce", zap.String("partitionName", p.Name))
-	var lsnAfterLSNForNextAck uint64
+	batches := make([][]byte, 0, 16)
+	endOffsets := make([][]uint32, 0, 16)
+	var lsnAfterHighestReceivedLSN uint64
+	var lsnAfterHighestAppendedLSN uint64
+	flushScheduled := false
 	checkScheduled := false
 	for {
 		lir, ok := <-p.LogInteractionRequests
@@ -91,6 +98,30 @@ func (p *Partition) logInteractions() {
 			return
 		}
 		if abr := lir.AppendBatchRequest; abr != nil {
+			if !flushScheduled {
+				go func() {
+					time.Sleep(MaxFlushBatchDelay)
+					p.LogInteractionRequests <- LogInteractionRequest{
+						flushBatchRequest: &struct{}{},
+					}
+				}()
+				flushScheduled = true
+			}
+			numMessages := uint32(len(abr.EndOffsetsExclusively))
+			p.outstandingAcks <- &outstandingAck{
+				ack: &pb.ProduceAck{
+					BatchId:       abr.BatchId,
+					NumMessages:   numMessages,
+					StartLsn:      lsnAfterHighestReceivedLSN,
+					PartitionName: p.Name,
+				},
+				produceResponse: abr.ProduceResponse,
+			}
+			lsnAfterHighestReceivedLSN += uint64(numMessages)
+			batches = append(batches, abr.Payload)
+			endOffsets = append(endOffsets, abr.EndOffsetsExclusively)
+		} else if lir.flushBatchRequest != nil {
+			flushScheduled = false
 			if !checkScheduled {
 				go func() {
 					time.Sleep(MaxCheckLSNDelay)
@@ -100,29 +131,24 @@ func (p *Partition) logInteractions() {
 				}()
 				checkScheduled = true
 			}
-			numMessages := uint32(len(abr.EndOffsetsExclusively))
-			p.outstandingAcks <- &outstandingAck{
-				ack: &pb.ProduceAck{
-					BatchId:       abr.BatchId,
-					NumMessages:   numMessages,
-					StartLsn:      lsnAfterLSNForNextAck,
-					PartitionName: p.Name,
-				},
-				produceResponse: abr.ProduceResponse,
-			}
-			lsnAfterLSNForNextAck += uint64(numMessages)
-			committedLSN, err := p.logClient.AppendAsync(abr.Payload, abr.EndOffsetsExclusively)
+			committedLSN, err := p.logClient.AppendAsync(batches, endOffsets)
 			if err != nil {
 				p.logger.Error("Error appending batch to log", zap.Error(err), zap.String("partitionName", p.Name))
+				return
 			}
+			p.logger.Info("Send batches", zap.Int("numBatches", len(batches)))
+			batches = make([][]byte, 0, 16)
+			endOffsets = make([][]uint32, 0, 16)
+			lsnAfterHighestAppendedLSN = lsnAfterHighestReceivedLSN
 			p.newCommittedLSN <- committedLSN
 		} else if lir.pollCommittedRequest != nil {
 			checkScheduled = false
 			committedLSN, err := p.logClient.PollCompletion()
 			if err != nil {
 				p.logger.Error("Error polling committed LSN", zap.Error(err), zap.String("partitionName", p.Name))
+				return
 			}
-			if committedLSN < lsnAfterLSNForNextAck-1 {
+			if committedLSN < lsnAfterHighestAppendedLSN-1 {
 				go func() {
 					time.Sleep(MaxCheckLSNDelay)
 					p.LogInteractionRequests <- LogInteractionRequest{

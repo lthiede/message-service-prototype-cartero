@@ -8,15 +8,15 @@ import (
 	"os/signal"
 	"syscall"
 
+	"net/http"
+	_ "net/http/pprof"
+
 	"github.com/lthiede/cartero/server"
 	"go.uber.org/zap"
 )
 
 type stringSlice []string
 
-// var cpuFlag = flag.Bool("c", false, "do cpu profiling")
-// var blockFlag = flag.Bool("b", false, "do block profiling")
-// var mutexFlag = flag.Bool("m", false, "do mutex profiling")
 var sFlag = flag.String("s", "localhost:8080", "server address")
 var logAddressFlag stringSlice
 
@@ -32,13 +32,9 @@ func (n *stringSlice) Set(value string) error {
 func main() {
 	flag.Var(&logAddressFlag, "o", "addresses of log nodes")
 	flag.Parse()
-	// if *cpuFlag {
-	// 	defer profile.Start(profile.CPUProfile).Stop()
-	// } else if *blockFlag {
-	// 	defer profile.Start(profile.BlockProfile).Stop()
-	// } else if *mutexFlag {
-	// 	defer profile.Start(profile.MutexProfile).Stop()
-	// }
+	go func() {
+		log.Println(http.ListenAndServe("localhost:6060", nil))
+	}()
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	config := zap.NewDevelopmentConfig()

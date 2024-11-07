@@ -63,7 +63,7 @@ func New(name string, logAddresses []string, logger *zap.Logger) (*Partition, er
 	p := &Partition{
 		Name:                   name,
 		Alive:                  true,
-		outstandingAcks:        make(chan *outstandingAck, logclient.MaxOutstanding+1),
+		outstandingAcks:        make(chan *outstandingAck, 4*logclient.MaxOutstanding),
 		newCommittedLSN:        make(chan uint64),
 		LogInteractionRequests: make(chan LogInteractionRequest),
 		quit:                   make(chan struct{}),
@@ -84,6 +84,7 @@ func (p *Partition) logInteractions() {
 	p.logger.Info("Start handling produce", zap.String("partitionName", p.Name))
 	var lsnAfterLSNForNextAck uint64
 	checkScheduled := false
+	var passLSN uint8
 	for {
 		lir, ok := <-p.LogInteractionRequests
 		if !ok {
@@ -111,11 +112,15 @@ func (p *Partition) logInteractions() {
 				produceResponse: abr.ProduceResponse,
 			}
 			lsnAfterLSNForNextAck += uint64(numMessages)
-			committedLSN, err := p.logClient.AppendAsync(abr.Payload, abr.EndOffsetsExclusively)
+			lsnAfterCommittedLSN, err := p.logClient.AppendAsync(abr.Payload, abr.EndOffsetsExclusively)
 			if err != nil {
 				p.logger.Error("Error appending batch to log", zap.Error(err), zap.String("partitionName", p.Name))
+				return
 			}
-			p.newCommittedLSN <- committedLSN
+			passLSN = (passLSN + 1) % 4
+			if passLSN == 0 {
+				p.newCommittedLSN <- lsnAfterCommittedLSN
+			}
 		} else if lir.pollCommittedRequest != nil {
 			checkScheduled = false
 			committedLSN, err := p.logClient.PollCompletion()
@@ -131,7 +136,7 @@ func (p *Partition) logInteractions() {
 				}()
 				checkScheduled = true
 			}
-			p.newCommittedLSN <- committedLSN
+			p.newCommittedLSN <- committedLSN + 1
 		}
 	}
 }
@@ -144,7 +149,7 @@ func (p *Partition) handleAcks() {
 			p.logger.Info("Stop handling acks", zap.String("partitionName", p.Name))
 		}
 		if longestOutstandingAck != nil {
-			if committedLSN+1 >= longestOutstandingAck.ack.StartLsn+uint64(longestOutstandingAck.ack.NumMessages) {
+			if committedLSN >= longestOutstandingAck.ack.StartLsn+uint64(longestOutstandingAck.ack.NumMessages) {
 				longestOutstandingAck.produceResponse <- &pb.Response{
 					Response: &pb.Response_ProduceAck{
 						ProduceAck: longestOutstandingAck.ack,
@@ -158,7 +163,7 @@ func (p *Partition) handleAcks() {
 		for {
 			select {
 			case longestOutstandingAck = <-p.outstandingAcks:
-				if committedLSN+1 >= longestOutstandingAck.ack.StartLsn+uint64(longestOutstandingAck.ack.NumMessages) {
+				if committedLSN >= longestOutstandingAck.ack.StartLsn+uint64(longestOutstandingAck.ack.NumMessages) {
 					longestOutstandingAck.produceResponse <- &pb.Response{
 						Response: &pb.Response_ProduceAck{
 							ProduceAck: longestOutstandingAck.ack,

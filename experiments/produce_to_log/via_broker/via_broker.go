@@ -15,8 +15,8 @@ import (
 )
 
 const payloadLength = 3800
-const warmupDuration = 60 * time.Second
-const experimentDuration = 120 * time.Second
+const warmupDuration = 10 * time.Second
+const experimentDuration = 10 * time.Second
 
 type stringSlice []string
 
@@ -59,6 +59,16 @@ func (n *stringSlice) Set(value string) error {
 // 3 clients sent 14786821 messages on 3 channels in 120 seconds; message rate 123223 msg/s; bw 468249331 B/s
 // ack per batch, through partition, separate payload, ack go routine, no actual log interactions
 // 3 clients sent 36990274 messages on 3 channels in 120 seconds; message rate 308252 msg/s; bw 1171358676 B/s
+// ack per batch, through partition, separate payload, ack go routine, calling rust once per batch
+// 3 clients sent 19495648 messages on 3 channels in 120 seconds; message rate 162463 msg/s; bw 617362186 B/s
+// ack per batch, through partition, separate payload, ack go routine, calling rust once per batch, log build for release
+// 3 clients sent 24492586 messages on 3 channels in 120 seconds; message rate 204104 msg/s; bw 775598556 B/s
+// ack per batch, through partition, separate payload, ack go routine, calling rust once per batch, ack routine spinning on atomic for lsn
+// 3 clients sent 18157706 messages on 3 channels in 120 seconds; message rate 151314 msg/s; bw 574994023 B/s
+// ack per batch, through partition, separate payload, ack go routine, calling rust once per buffer of batches collected over 75 ms (75ms seems best)
+// 3 clients sent 19275626 messages on 3 channels in 120 seconds; message rate 160630 msg/s; bw 610394823 B/s
+// ack per batch, through partition, separate payload, ack go routine, calling rust once per buffer of batches collected over 75 ms, log build for release
+// 3 clients sent 19205208 messages on 3 channels in 120 seconds; message rate 160043 msg/s; bw 608164920 B/s
 func main() {
 	flag.Var(&logAddressFlag, "o", "addresses of log nodes")
 	flag.Parse()

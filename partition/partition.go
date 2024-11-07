@@ -136,7 +136,6 @@ func (p *Partition) logInteractions() {
 				p.logger.Error("Error appending batch to log", zap.Error(err), zap.String("partitionName", p.Name))
 				return
 			}
-			p.logger.Info("Send batches", zap.Int("numBatches", len(batches)))
 			batches = make([][]byte, 0, 16)
 			endOffsets = make([][]uint32, 0, 16)
 			lsnAfterHighestAppendedLSN = lsnAfterHighestReceivedLSN

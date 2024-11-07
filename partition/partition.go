@@ -20,8 +20,6 @@ type Partition struct {
 	Alive                  bool
 	AliveLock              sync.RWMutex
 	LogInteractionRequests chan LogInteractionRequest
-	numOutstanding         uint
-	numOutstandingLock     sync.Mutex
 	outstandingAcks        chan *outstandingAck
 	newCommittedLSN        chan uint64
 	logClient              *logclient.ClientWrapper
@@ -105,10 +103,8 @@ func (p *Partition) logInteractions() {
 			return
 		}
 		if abr := lir.AppendBatchRequest; abr != nil {
-			p.numOutstandingLock.Lock()
-			currentNumOutstanding := p.numOutstanding
-			p.numOutstandingLock.Unlock()
-			if currentNumOutstanding == logclient.MaxOutstanding+1 {
+			numMessages := uint32(len(abr.EndOffsetsExclusively))
+			if len(batches) == logclient.MaxOutstanding+1 {
 				if !checkScheduled {
 					go func() {
 						time.Sleep(MaxCheckLSNDelay)
@@ -125,14 +121,13 @@ func (p *Partition) logInteractions() {
 				}
 				batches = make([][]byte, 0, 16)
 				endOffsets = make([][]uint32, 0, 16)
-				lsnAfterCommittedLSN = lsnAfterHighestReceivedLSN
+				lsnAfterHighestAppendedLSN = lsnAfterHighestReceivedLSN
 				if lsnAfterCommittedLSN == 0 {
 					panic("appended batches, but no lsn committed")
 				}
 				p.newCommittedLSN <- lsnAfterCommittedLSN
 				flushEpoch++
 			}
-			numMessages := uint32(len(abr.EndOffsetsExclusively))
 			p.outstandingAcks <- &outstandingAck{
 				ack: &pb.ProduceAck{
 					BatchId:       abr.BatchId,
@@ -142,9 +137,6 @@ func (p *Partition) logInteractions() {
 				},
 				produceResponse: abr.ProduceResponse,
 			}
-			p.numOutstandingLock.Lock()
-			p.numOutstanding++
-			p.numOutstandingLock.Unlock()
 			if !flushScheduled {
 				go func(epoch int) {
 					time.Sleep(MaxFlushBatchDelay)
@@ -232,9 +224,6 @@ func (p *Partition) handleAcks() {
 		for {
 			select {
 			case longestOutstandingAck, ok = <-p.outstandingAcks:
-				p.numOutstandingLock.Lock()
-				p.numOutstanding--
-				p.numOutstandingLock.Unlock()
 				if lsnAfterCommittedLSN >= longestOutstandingAck.ack.StartLsn+uint64(longestOutstandingAck.ack.NumMessages) {
 					longestOutstandingAck.produceResponse <- &pb.Response{
 						Response: &pb.Response_ProduceAck{

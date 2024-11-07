@@ -20,6 +20,8 @@ type Partition struct {
 	Alive                  bool
 	AliveLock              sync.RWMutex
 	LogInteractionRequests chan LogInteractionRequest
+	numOutstanding         uint
+	numOutstandingLock     sync.Mutex
 	outstandingAcks        chan *outstandingAck
 	newCommittedLSN        chan uint64
 	logClient              *logclient.ClientWrapper
@@ -30,8 +32,12 @@ type Partition struct {
 
 type LogInteractionRequest struct {
 	AppendBatchRequest   *AppendBatchRequest
-	flushBatchRequest    *struct{}
+	flushBatchRequest    *flushBatchRequest
 	pollCommittedRequest *struct{}
+}
+
+type flushBatchRequest struct {
+	epoch int
 }
 
 type AppendBatchRequest struct {
@@ -76,8 +82,8 @@ func New(name string, logAddresses []string, logger *zap.Logger) (*Partition, er
 	return p, nil
 }
 
-var MaxCheckLSNDelay = 50 * time.Millisecond
-var MaxFlushBatchDelay = 5 * time.Millisecond
+var MaxCheckLSNDelay = 250 * time.Millisecond
+var MaxFlushBatchDelay = 100 * time.Millisecond
 
 // TODO: continue with changes to segmentstore
 // TODO: build segmentstore in release mode
@@ -89,6 +95,7 @@ func (p *Partition) logInteractions() {
 	endOffsets := make([][]uint32, 0, 16)
 	var lsnAfterHighestReceivedLSN uint64
 	var lsnAfterHighestAppendedLSN uint64
+	flushEpoch := 0
 	flushScheduled := false
 	checkScheduled := false
 	for {
@@ -98,14 +105,32 @@ func (p *Partition) logInteractions() {
 			return
 		}
 		if abr := lir.AppendBatchRequest; abr != nil {
-			if !flushScheduled {
-				go func() {
-					time.Sleep(MaxFlushBatchDelay)
-					p.LogInteractionRequests <- LogInteractionRequest{
-						flushBatchRequest: &struct{}{},
-					}
-				}()
-				flushScheduled = true
+			p.numOutstandingLock.Lock()
+			currentNumOutstanding := p.numOutstanding
+			p.numOutstandingLock.Unlock()
+			if currentNumOutstanding == logclient.MaxOutstanding+1 {
+				if !checkScheduled {
+					go func() {
+						time.Sleep(MaxCheckLSNDelay)
+						p.LogInteractionRequests <- LogInteractionRequest{
+							pollCommittedRequest: &struct{}{},
+						}
+					}()
+					checkScheduled = true
+				}
+				lsnAfterCommittedLSN, err := p.logClient.AppendAsync(batches, endOffsets)
+				if err != nil {
+					p.logger.Error("Error appending batch to log", zap.Error(err), zap.String("partitionName", p.Name))
+					return
+				}
+				batches = make([][]byte, 0, 16)
+				endOffsets = make([][]uint32, 0, 16)
+				lsnAfterCommittedLSN = lsnAfterHighestReceivedLSN
+				if lsnAfterCommittedLSN == 0 {
+					panic("appended batches, but no lsn committed")
+				}
+				p.newCommittedLSN <- lsnAfterCommittedLSN
+				flushEpoch++
 			}
 			numMessages := uint32(len(abr.EndOffsetsExclusively))
 			p.outstandingAcks <- &outstandingAck{
@@ -117,11 +142,28 @@ func (p *Partition) logInteractions() {
 				},
 				produceResponse: abr.ProduceResponse,
 			}
+			p.numOutstandingLock.Lock()
+			p.numOutstanding++
+			p.numOutstandingLock.Unlock()
+			if !flushScheduled {
+				go func(epoch int) {
+					time.Sleep(MaxFlushBatchDelay)
+					p.LogInteractionRequests <- LogInteractionRequest{
+						flushBatchRequest: &flushBatchRequest{
+							epoch: epoch,
+						},
+					}
+				}(flushEpoch)
+				flushScheduled = true
+			}
 			lsnAfterHighestReceivedLSN += uint64(numMessages)
 			batches = append(batches, abr.Payload)
 			endOffsets = append(endOffsets, abr.EndOffsetsExclusively)
-		} else if lir.flushBatchRequest != nil {
+		} else if fbr := lir.flushBatchRequest; fbr != nil {
 			flushScheduled = false
+			if fbr.epoch < flushEpoch {
+				continue
+			}
 			if !checkScheduled {
 				go func() {
 					time.Sleep(MaxCheckLSNDelay)
@@ -139,6 +181,9 @@ func (p *Partition) logInteractions() {
 			batches = make([][]byte, 0, 16)
 			endOffsets = make([][]uint32, 0, 16)
 			lsnAfterHighestAppendedLSN = lsnAfterHighestReceivedLSN
+			if lsnAfterCommittedLSN == 0 {
+				panic("appended batches, but no lsn committed")
+			}
 			p.newCommittedLSN <- lsnAfterCommittedLSN
 		} else if lir.pollCommittedRequest != nil {
 			checkScheduled = false
@@ -159,6 +204,10 @@ func (p *Partition) logInteractions() {
 			p.newCommittedLSN <- committedLSN + 1
 		}
 	}
+}
+
+func (p *Partition) flush() {
+
 }
 
 func (p *Partition) handleAcks() {
@@ -182,7 +231,10 @@ func (p *Partition) handleAcks() {
 	moreAcks:
 		for {
 			select {
-			case longestOutstandingAck = <-p.outstandingAcks:
+			case longestOutstandingAck, ok = <-p.outstandingAcks:
+				p.numOutstandingLock.Lock()
+				p.numOutstanding--
+				p.numOutstandingLock.Unlock()
 				if lsnAfterCommittedLSN >= longestOutstandingAck.ack.StartLsn+uint64(longestOutstandingAck.ack.NumMessages) {
 					longestOutstandingAck.produceResponse <- &pb.Response{
 						Response: &pb.Response_ProduceAck{

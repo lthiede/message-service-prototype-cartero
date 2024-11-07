@@ -57,10 +57,8 @@ github.com/stretchr/testify v1.8.0/go.mod h1:yNjHg4UonilssWZ8iaSj1OCr/vHnekPRkoO
 github.com/stretchr/testify v1.8.4/go.mod h1:sz/lmYIOXD/1dqDmKjjqLyZ2RngseejIcXlSw2iwfAo=
 github.com/stretchr/testify v1.9.0 h1:HtqpIVDClZ4nwg75+f6Lvsy/wHu+3BoSGCbBAcpTsTg=
 github.com/stretchr/testify v1.9.0/go.mod h1:r2ic/lqez/lEtzL7wO/rwa5dbSLXVDPFyf8C91i36aY=
-github.com/toziegler/rust-segmentstore v0.0.0-20241105163902-62c94b3884f8 h1:iygbc5VJ1T8awcQvBJ/9/HgrYwCevs3aa9DFVhVxxc0=
-github.com/toziegler/rust-segmentstore v0.0.0-20241105163902-62c94b3884f8/go.mod h1:S/2BvzQ1pBvhO+/qH8gFdRMZohoqFnKvH8R+wDWFnB4=
-github.com/toziegler/rust-segmentstore v0.0.0-20241106201625-aeaa4ea85fa5 h1:8fsOdcSn4LMu4LKGu7o8/8rBnyCxPFNwi/vDbfHq/Xk=
-github.com/toziegler/rust-segmentstore v0.0.0-20241106201625-aeaa4ea85fa5/go.mod h1:S/2BvzQ1pBvhO+/qH8gFdRMZohoqFnKvH8R+wDWFnB4=
+github.com/toziegler/rust-segmentstore v0.0.0-20241107110753-de7f1f79d2fd h1:vzl3lRsp29zBKRL5tzLPoXhT87V5aKClnonGdb8N4Yc=
+github.com/toziegler/rust-segmentstore v0.0.0-20241107110753-de7f1f79d2fd/go.mod h1:S/2BvzQ1pBvhO+/qH8gFdRMZohoqFnKvH8R+wDWFnB4=
 github.com/yuin/goldmark v1.4.13/go.mod h1:6yULJ656Px+3vBD8DxQVa3kxgyrAnzto9xy5taEt/CY=
 go.uber.org/goleak v1.3.0 h1:2K3zAYmnTNqV73imy9J1T3WC+gmCePx2hEGkimedGto=
 go.uber.org/goleak v1.3.0/go.mod h1:CoHD4mav9JJNrW/WLlf7HGZPjdw8EucARQHekz1X6bE=

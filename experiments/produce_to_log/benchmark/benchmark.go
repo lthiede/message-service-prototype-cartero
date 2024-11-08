@@ -85,14 +85,24 @@ func experiment(messagesSent chan<- uint64) {
 		return
 	}
 	log.Println("Starting warmup")
-	warmupFinished := timer(warmupDuration)
+	start := time.Now()
 warmup:
 	for {
-		select {
-		case <-warmupFinished:
-			break warmup
-		default:
+		for i := 0; i < 100; i++ {
 			produce(payload, endOffsets, logClient)
+		}
+		if time.Since(start) > warmupDuration {
+			break warmup
+		}
+	}
+	start = time.Now()
+experiment:
+	for {
+		for i := 0; i < 100; i++ {
+			produce(payload, endOffsets, logClient)
+		}
+		if time.Since(start) > experimentDuration {
+			break experiment
 		}
 	}
 	startLsn, err := logClient.PollCompletion()
@@ -102,16 +112,7 @@ warmup:
 		return
 	}
 	log.Println("Starting measurements")
-	experimentFinished := timer(experimentDuration)
-experiment:
-	for {
-		select {
-		case <-experimentFinished:
-			break experiment
-		default:
-			produce(payload, endOffsets, logClient)
-		}
-	}
+	produce(payload, endOffsets, logClient)
 	endLsn, err := logClient.PollCompletion()
 	if err != nil {
 		log.Printf("error polling highest committed lsn after experiment: %v", err)

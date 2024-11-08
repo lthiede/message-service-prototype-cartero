@@ -10,7 +10,7 @@ import (
 	logclient "github.com/toziegler/rust-segmentstore/libsls-bindings/go_example/client"
 )
 
-const payloadLength = 3800
+const messageLength = 3800
 const warmupDuration = 60 * time.Second
 const experimentDuration = 120 * time.Second
 
@@ -59,12 +59,16 @@ func main() {
 		messagesSentTotal,
 		uint64(experimentDuration.Seconds()),
 		messagesSentTotal/uint64(experimentDuration.Seconds()),
-		messagesSentTotal*payloadLength/uint64(experimentDuration.Seconds()))
+		messagesSentTotal*messageLength/uint64(experimentDuration.Seconds()))
 }
 
 func experiment(messagesSent chan<- uint64) {
-	payload := make([]byte, payloadLength)
+	payload := make([]byte, 137*messageLength)
+	endOffsets := make([]uint32, 137)
 	rand.Read(payload)
+	for i := 0; i < 137; i++ {
+		endOffsets[i] = uint32((i + 1) * messageLength)
+	}
 	logClient, err := logclient.New(logAddressFlag,
 		logclient.MaxOutstanding,
 		logclient.UringEntries,
@@ -88,7 +92,7 @@ warmup:
 		case <-warmupFinished:
 			break warmup
 		default:
-			produce(payload, logClient)
+			produce(payload, endOffsets, logClient)
 		}
 	}
 	startLsn, err := logClient.PollCompletion()
@@ -105,7 +109,7 @@ experiment:
 		case <-experimentFinished:
 			break experiment
 		default:
-			produce(payload, logClient)
+			produce(payload, endOffsets, logClient)
 		}
 	}
 	endLsn, err := logClient.PollCompletion()
@@ -117,8 +121,8 @@ experiment:
 	messagesSent <- endLsn - startLsn
 }
 
-func produce(payload []byte, client *logclient.ClientWrapper) error {
-	_, err := client.AppendAsync(payload)
+func produce(payload []byte, endOffsets []uint32, client *logclient.ClientWrapper) error {
+	_, err := client.AppendAsync(payload, endOffsets)
 	if err != nil {
 		_, err := client.PollCompletion()
 		if err != nil {

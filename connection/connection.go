@@ -155,11 +155,12 @@ func (c *Connection) SendResponse(res *pb.Response) {
 
 func (c *Connection) handleResponses() {
 	for {
-		response, ok := <-c.responses
-		if !ok {
-			c.logger.Info("Stop handling responses")
+		select {
+		case <-c.quit:
+			return
+		case response := <-c.responses:
+			c.SendResponse(response)
 		}
-		c.SendResponse(response)
 	}
 
 }

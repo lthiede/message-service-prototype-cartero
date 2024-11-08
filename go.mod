@@ -29,7 +29,7 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/rjeczalik/notify v0.9.3 // indirect
 	github.com/rs/xid v1.5.0 // indirect
-	github.com/toziegler/rust-segmentstore v0.0.0-20241105163902-62c94b3884f8
+	github.com/toziegler/rust-segmentstore v0.0.0-20241108105224-604cf7cb7526
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/crypto v0.23.0 // indirect
 	golang.org/x/net v0.25.0 // indirect

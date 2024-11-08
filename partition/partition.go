@@ -102,9 +102,9 @@ func (p *Partition) logInteractions() {
 				checkScheduled = true
 			}
 			numMessages := uint32(len(abr.EndOffsetsExclusively))
-			p.logger.Info("Trying to pass outstanding ack",
-				zap.Uint64("lsnAfterNeededLSN", lsnAfterLSNForNextAck+uint64(numMessages)),
-				zap.String("partitionName", p.Name))
+			// p.logger.Info("Trying to pass outstanding ack",
+			// 	zap.Uint64("lsnAfterNeededLSN", lsnAfterLSNForNextAck+uint64(numMessages)),
+			// 	zap.String("partitionName", p.Name))
 			p.outstandingAcks <- &outstandingAck{
 				ack: &pb.ProduceAck{
 					BatchId:       abr.BatchId,
@@ -122,9 +122,9 @@ func (p *Partition) logInteractions() {
 			}
 			passLSN = (passLSN + 1) % 4
 			if passLSN == 0 {
-				p.logger.Info("Trying to pass committed lsn",
-					zap.Uint64("lsnAfterCommittedLSN", lsnAfterCommittedLSN),
-					zap.String("partitionName", p.Name))
+				// p.logger.Info("Trying to pass committed lsn",
+				// 	zap.Uint64("lsnAfterCommittedLSN", lsnAfterCommittedLSN),
+				// 	zap.String("partitionName", p.Name))
 				p.newCommittedLSN <- lsnAfterCommittedLSN
 			}
 		} else if lir.pollCommittedRequest != nil {
@@ -154,9 +154,9 @@ func (p *Partition) handleAcks() {
 		if !ok {
 			p.logger.Info("Stop handling acks", zap.String("partitionName", p.Name))
 		}
-		p.logger.Info("Received committed lsn",
-			zap.Uint64("lsnAfterCommittedLSN", lsnAfterCommittedLSN),
-			zap.String("partitionName", p.Name))
+		// p.logger.Info("Received committed lsn",
+		// 	zap.Uint64("lsnAfterCommittedLSN", lsnAfterCommittedLSN),
+		// 	zap.String("partitionName", p.Name))
 		if longestOutstandingAck != nil {
 			if lsnAfterCommittedLSN >= longestOutstandingAck.ack.StartLsn+uint64(longestOutstandingAck.ack.NumMessages) {
 				longestOutstandingAck.produceResponse <- &pb.Response{
@@ -172,9 +172,9 @@ func (p *Partition) handleAcks() {
 		for {
 			select {
 			case longestOutstandingAck = <-p.outstandingAcks:
-				p.logger.Info("Received outstanding ack",
-					zap.Uint64("lsnAfterNeededLSN", longestOutstandingAck.ack.StartLsn+uint64(longestOutstandingAck.ack.NumMessages)),
-					zap.String("partitionName", p.Name))
+				// p.logger.Info("Received outstanding ack",
+				// 	zap.Uint64("lsnAfterNeededLSN", longestOutstandingAck.ack.StartLsn+uint64(longestOutstandingAck.ack.NumMessages)),
+				// 	zap.String("partitionName", p.Name))
 				if lsnAfterCommittedLSN >= longestOutstandingAck.ack.StartLsn+uint64(longestOutstandingAck.ack.NumMessages) {
 					longestOutstandingAck.produceResponse <- &pb.Response{
 						Response: &pb.Response_ProduceAck{

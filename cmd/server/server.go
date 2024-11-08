@@ -6,11 +6,10 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"runtime"
 	"syscall"
 
-	"net/http"
-	_ "net/http/pprof"
+	// "net/http"
+	// _ "net/http/pprof"
 
 	"github.com/lthiede/cartero/server"
 	"go.uber.org/zap"
@@ -36,10 +35,10 @@ func (n *stringSlice) Set(value string) error {
 func main() {
 	flag.Var(&logAddressFlag, "o", "addresses of log nodes")
 	flag.Parse()
-	go func() {
-		runtime.SetBlockProfileRate(1)
-		log.Println(http.ListenAndServe("localhost:6060", nil))
-	}()
+	// go func() {
+	// 	runtime.SetBlockProfileRate(1)
+	// 	log.Println(http.ListenAndServe("localhost:6060", nil))
+	// }()
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	config := zap.NewDevelopmentConfig()

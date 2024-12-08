@@ -90,6 +90,7 @@ func (p *Producer) AddMessage(message []byte) error {
 		if err != nil {
 			return fmt.Errorf("failed to send batch: %v", err)
 		}
+		newPayloadSize = uint32(len(message))
 		p.epoch++
 	}
 	p.messages = append(p.messages, message)

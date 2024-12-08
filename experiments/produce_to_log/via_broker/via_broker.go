@@ -237,6 +237,7 @@ warmup:
 			}
 		}
 	}
+	log.Println("Starting experiment")
 	startNumMessages := producer.NumMessagesAck()
 	numMeasurements := int(experimentDuration.Seconds() / measurementPeriod.Seconds())
 	messagesPerSecondMeasurements := make([]uint64, numMeasurements)
@@ -246,6 +247,7 @@ warmup:
 		start := time.Now()
 	experiment:
 		for {
+			log.Println("Starting measurement period")
 			select {
 			case <-periodFinished:
 				break experiment

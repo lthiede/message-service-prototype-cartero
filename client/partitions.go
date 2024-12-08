@@ -42,6 +42,8 @@ func (c *Client) CreatePartition(partitionName string, numPartitions uint32) err
 	successful := <-successChan
 	if !successful {
 		return fmt.Errorf("creating partition %s failed on the server side", partitionName)
+	} else {
+		c.logger.Info("Successfully created partition")
 	}
 	return nil
 }

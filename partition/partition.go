@@ -55,10 +55,14 @@ func New(name string, logAddresses []string, logger *zap.Logger) (*Partition, er
 	logClient, err := logclient.New(logAddresses, logclient.MaxOutstanding, logclient.UringEntries, logclient.UringFlagNoSingleIssuer)
 	if err != nil {
 		return nil, fmt.Errorf("error creating log client: %v", err)
+	} else {
+		logger.Info("Created log client")
 	}
 	err = logClient.Connect()
 	if err != nil {
 		return nil, fmt.Errorf("error connecting to log nodes: %v", err)
+	} else {
+		logger.Info("Connected to log nodes")
 	}
 	p := &Partition{
 		Name:                   name,

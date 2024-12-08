@@ -55,7 +55,7 @@ func (pm *PartitionManager) CreatePartition(partitionName string, numPartitions 
 }
 
 func (pm *PartitionManager) shittyLogNodeLoadBalancing(numPartitions uint32) ([][]string, error) {
-	if numPartitions*WriteQuorum%uint32(len(pm.logAddresses)) == 0 {
+	if numPartitions*WriteQuorum%uint32(len(pm.logAddresses)) != 0 {
 		return nil,
 			fmt.Errorf("creating a number of partitions that can't be evenly distributed on the log nodes is not supported. %d partitions, %d write quorum, %d log nodes",
 				numPartitions,

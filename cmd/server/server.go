@@ -48,7 +48,7 @@ func main() {
 		log.Panicf("Error creating logger: %v", err)
 	}
 	defer logger.Sync()
-	server, err := server.New([]string{"partition0"}, *sFlag, logAddressFlag, logger)
+	server, err := server.New([]string{}, *sFlag, logAddressFlag, logger)
 	if err != nil {
 		logger.Panic("Error creating server", zap.Error(err))
 	}

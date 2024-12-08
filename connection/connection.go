@@ -67,6 +67,7 @@ func (c *Connection) handleRequests() {
 				for i := 0; i < int(numBytes); {
 					n, err := c.conn.Read(payload[i:])
 					if err != nil {
+						c.logger.Error("Error reading produce payload", zap.Error(err))
 					}
 					i += n
 				}

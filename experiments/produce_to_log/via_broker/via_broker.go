@@ -217,10 +217,6 @@ func oneClient(partitionName string, logName string, messagesSent chan<- clientR
 		return
 	}
 	defer client.Close()
-	err = client.CreatePartition(partitionName, 1)
-	if err != nil {
-		fmt.Printf("Error creating partition: %v\n", err)
-	}
 	producer, err := client.NewProducer(partitionName, false)
 	if err != nil {
 		fmt.Printf("Error creating producer: %v\n", err)

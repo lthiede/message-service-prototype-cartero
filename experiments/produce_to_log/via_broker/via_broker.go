@@ -243,6 +243,7 @@ warmup:
 	messagesPerSecondMeasurements := make([]uint64, numMeasurements)
 	producer.StartMeasuringLatencies(100)
 	for i := range numMeasurements {
+		log.Printf("iteration %d\n", i)
 		periodFinished := timer(measurementPeriod)
 		start := time.Now()
 	experiment:

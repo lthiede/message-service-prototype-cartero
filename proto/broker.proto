@@ -9,6 +9,7 @@ message Request {
         ProduceRequest produce_request = 1;
         ConsumeRequest consume_request = 2;
         CreatePartitionRequest create_partition_request = 3;
+        DeletePartitionRequest delete_partition_request = 4;
     }
 }
 
@@ -25,7 +26,13 @@ message ConsumeRequest {
 }
 
 message CreatePartitionRequest {
-    string partition_name = 1;
+    string topic_name = 1;
+    uint32 num_partitions = 2;
+}
+
+message DeletePartitionRequest {
+    string topic_name = 1;
+    uint32 num_partitions = 2;
 }
 
 message Response {
@@ -33,6 +40,7 @@ message Response {
         ProduceAck produce_ack = 1;
         ConsumeResponse consume_response = 2;
         CreatePartitionResponse create_partition_response = 3;
+        DeletePartitionResponse delete_partition_response = 4;
     }
 }
 
@@ -49,6 +57,11 @@ message ConsumeResponse {
 }
 
 message CreatePartitionResponse {
+    bool successful = 1;
+    string partition_name = 2;
+}
+
+message DeletePartitionResponse {
     bool successful = 1;
     string partition_name = 2;
 }

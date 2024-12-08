@@ -69,20 +69,34 @@ func (c *Connection) handleRequests() {
 					}
 					i += n
 				}
+				usablePartition := false
+				// check cache for suitable partition
 				p, ok := c.partitionCache[produceReq.PartitionName]
-				if !ok {
+				if ok {
+					p.AliveLock.RLock()
+					if !p.Alive {
+						delete(c.partitionCache, produceReq.PartitionName)
+						p.AliveLock.RUnlock()
+					} else {
+						usablePartition = true
+					}
+				}
+				// try to get one from partition manager
+				if !usablePartition {
 					p, err = c.partitionManager.GetPartition(produceReq.PartitionName)
 					if err != nil {
 						c.logger.Error("Error getting partition", zap.Error(err))
 						continue
 					}
-					c.partitionCache[produceReq.PartitionName] = p
+					p.AliveLock.RLock()
+					if !p.Alive {
+						p.AliveLock.RUnlock()
+					} else {
+						usablePartition = true
+						c.partitionCache[produceReq.PartitionName] = p
+					}
 				}
-				p.AliveLock.RLock()
-				if !p.Alive {
-					delete(c.partitionCache, produceReq.PartitionName)
-					c.logger.Error("Produce request to dead partition", zap.String("partitionName", produceReq.PartitionName), zap.Uint64("batchId", produceReq.BatchId))
-				} else {
+				if usablePartition {
 					p.LogInteractionRequests <- partition.LogInteractionRequest{
 						AppendBatchRequest: &partition.AppendBatchRequest{
 							BatchId:               produceReq.BatchId,
@@ -91,8 +105,8 @@ func (c *Connection) handleRequests() {
 							ProduceResponse:       c.responses,
 						},
 					}
+					p.AliveLock.RUnlock()
 				}
-				p.AliveLock.RUnlock()
 			case *pb.Request_ConsumeRequest:
 				consumeReq := req.ConsumeRequest
 				p, ok := c.partitionCache[consumeReq.PartitionName]
@@ -104,27 +118,44 @@ func (c *Connection) handleRequests() {
 					}
 				}
 				pc, ok := c.partitionConsumers[consumeReq.PartitionName]
-				if !ok {
-					newPc, err := consume.NewPartitionConsumer(p, c.SendResponse, consumeReq.StartLsn, int(consumeReq.MinNumMessages), c.logger)
+				if ok {
+					err := pc.UpdateConsumption(consumeReq.StartLsn, int(consumeReq.MinNumMessages))
 					if err != nil {
-						c.logger.Error("Failed to register consumer", zap.String("partitionName", consumeReq.PartitionName))
 						continue
 					}
-					c.partitionConsumers[consumeReq.PartitionName] = newPc
-					c.logger.Info("Registered partition consumer", zap.String("partitionName", consumeReq.PartitionName))
-				} else {
-					pc.UpdateConsumption(consumeReq.StartLsn, int(consumeReq.MinNumMessages))
 				}
+				newPc, err := consume.NewPartitionConsumer(p, c.SendResponse, consumeReq.StartLsn, int(consumeReq.MinNumMessages), c.logger)
+				if err != nil {
+					c.logger.Error("Failed to register consumer", zap.String("partitionName", consumeReq.PartitionName))
+					continue
+				}
+				c.partitionConsumers[consumeReq.PartitionName] = newPc
+				c.logger.Info("Registered partition consumer", zap.String("partitionName", consumeReq.PartitionName))
 			case *pb.Request_CreatePartitionRequest:
 				createPartitionRequest := req.CreatePartitionRequest
-				err := c.partitionManager.CreatePartition(createPartitionRequest.PartitionName)
+				err := c.partitionManager.CreatePartition(createPartitionRequest.TopicName, createPartitionRequest.NumPartitions)
 				if err != nil {
 					c.logger.Error("Failed to create partition", zap.Error(err))
 				}
 				response := &pb.Response{
 					Response: &pb.Response_CreatePartitionResponse{
 						CreatePartitionResponse: &pb.CreatePartitionResponse{
-							PartitionName: createPartitionRequest.PartitionName,
+							PartitionName: createPartitionRequest.TopicName,
+							Successful:    err == nil,
+						},
+					},
+				}
+				c.SendResponse(response)
+			case *pb.Request_DeletePartitionRequest:
+				deletePartitionRequest := req.DeletePartitionRequest
+				err := c.partitionManager.DeletePartition(deletePartitionRequest.TopicName, deletePartitionRequest.NumPartitions)
+				if err != nil {
+					c.logger.Error("Failed to delete partition", zap.Error(err))
+				}
+				response := &pb.Response{
+					Response: &pb.Response_DeletePartitionResponse{
+						DeletePartitionResponse: &pb.DeletePartitionResponse{
+							PartitionName: deletePartitionRequest.TopicName,
 							Successful:    err == nil,
 						},
 					},

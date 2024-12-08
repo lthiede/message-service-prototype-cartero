@@ -2,6 +2,7 @@ package partition
 
 import (
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,7 +26,6 @@ type Partition struct {
 	logClient              *logclient.ClientWrapper
 	logger                 *zap.Logger
 	nextLSNCommitted       atomic.Uint64 // initialized to default value 0
-	quit                   chan struct{}
 }
 
 type LogInteractionRequest struct {
@@ -66,7 +66,6 @@ func New(name string, logAddresses []string, logger *zap.Logger) (*Partition, er
 		outstandingAcks:        make(chan *outstandingAck, logclient.MaxOutstanding+1),
 		newCommittedLSN:        make(chan uint64),
 		LogInteractionRequests: make(chan LogInteractionRequest),
-		quit:                   make(chan struct{}),
 		logClient:              logClient,
 		logger:                 logger,
 	}
@@ -88,14 +87,20 @@ func (p *Partition) logInteractions() {
 		lir, ok := <-p.LogInteractionRequests
 		if !ok {
 			p.logger.Info("Stop handling produce", zap.String("partitionName", p.Name))
+			close(p.newCommittedLSN)
+			close(p.outstandingAcks)
 			return
 		}
 		if abr := lir.AppendBatchRequest; abr != nil {
 			if !checkScheduled {
 				go func() {
 					time.Sleep(MaxCheckLSNDelay)
-					p.LogInteractionRequests <- LogInteractionRequest{
-						pollCommittedRequest: &struct{}{},
+					p.AliveLock.RLock()
+					defer p.AliveLock.RUnlock()
+					if p.Alive {
+						p.LogInteractionRequests <- LogInteractionRequest{
+							pollCommittedRequest: &struct{}{},
+						}
 					}
 				}()
 				checkScheduled = true
@@ -128,8 +133,12 @@ func (p *Partition) logInteractions() {
 			if committedLSN+1 < lsnAfterLSNForNextAck {
 				go func() {
 					time.Sleep(MaxCheckLSNDelay)
-					p.LogInteractionRequests <- LogInteractionRequest{
-						pollCommittedRequest: &struct{}{},
+					p.AliveLock.RLock()
+					defer p.AliveLock.RUnlock()
+					if p.Alive {
+						p.LogInteractionRequests <- LogInteractionRequest{
+							pollCommittedRequest: &struct{}{},
+						}
 					}
 				}()
 				checkScheduled = true
@@ -145,7 +154,10 @@ func (p *Partition) handleAcks() {
 		lsnAfterCommittedLSN, ok := <-p.newCommittedLSN
 		if !ok {
 			p.logger.Info("Stop handling acks", zap.String("partitionName", p.Name))
+			p.nextLSNCommitted.Store(math.MaxUint64)
+			return
 		}
+		p.nextLSNCommitted.Store(lsnAfterCommittedLSN)
 		if longestOutstandingAck != nil {
 			if lsnAfterCommittedLSN >= longestOutstandingAck.ack.StartLsn+uint64(longestOutstandingAck.ack.NumMessages) {
 				longestOutstandingAck.produceResponse <- &pb.Response{
@@ -183,7 +195,10 @@ func (p *Partition) NextLSN() uint64 {
 }
 
 func (p *Partition) Close() error {
-	p.logger.Debug("Closing partition", zap.String("partitionName", p.Name))
-	close(p.quit)
+	p.AliveLock.Lock()
+	defer p.AliveLock.Unlock()
+	p.Alive = false
+	p.logger.Info("Closing partition", zap.String("partitionName", p.Name))
+	close(p.LogInteractionRequests)
 	return nil
 }

@@ -1,6 +1,9 @@
 package consume
 
 import (
+	"errors"
+	"math"
+	"sync"
 	"time"
 
 	"github.com/lthiede/cartero/partition"
@@ -24,6 +27,8 @@ type PartitionConsumer struct {
 	logger         *zap.Logger
 	update         chan update
 	checkForNew    chan struct{}
+	Alive          bool
+	AliveLock      sync.RWMutex
 	quit           chan struct{}
 }
 
@@ -36,6 +41,7 @@ func NewPartitionConsumer(p *partition.Partition, sendResponse func(*pb.Response
 		logger:         logger,
 		update:         make(chan update),
 		checkForNew:    make(chan struct{}),
+		Alive:          true,
 		quit:           make(chan struct{}),
 	}
 	logger.Info("Adding partition consumer", zap.String("partitionName", p.Name), zap.Uint64("startLSN", startLSN))
@@ -43,12 +49,18 @@ func NewPartitionConsumer(p *partition.Partition, sendResponse func(*pb.Response
 	return pc, nil
 }
 
-func (pc *PartitionConsumer) UpdateConsumption(startLSN uint64, minNumMessages int) {
+func (pc *PartitionConsumer) UpdateConsumption(startLSN uint64, minNumMessages int) error {
 	pc.logger.Info("Updating partition consumer", zap.String("partitionName", pc.p.Name), zap.Uint64("startLSN", startLSN), zap.Int("minNumMessages", minNumMessages))
+	pc.AliveLock.Lock()
+	defer pc.AliveLock.Unlock()
+	if !pc.Alive {
+		return errors.New("Consumption is dead")
+	}
 	pc.update <- update{
 		startLSN:       startLSN,
 		minNumMessages: minNumMessages,
 	}
+	return nil
 }
 
 func (pc *PartitionConsumer) handleConsume() {
@@ -62,25 +74,27 @@ func (pc *PartitionConsumer) handleConsume() {
 			pc.startLSN = update.startLSN
 			pc.minNumMessages = update.minNumMessages
 		case <-pc.checkForNew:
-			// hallo
 			newNextLSN := pc.p.NextLSN()
-			if newNextLSN < pc.startLSN {
-				pc.logger.Info("Ignoring consume notification smaller than startOffset",
-					zap.String("partitionName", pc.p.Name),
-					zap.Uint64("newNextLSN", newNextLSN),
-					zap.Uint("startLSN", uint(pc.startLSN)))
+			if newNextLSN == math.MaxUint64 {
+				pc.Close()
+				continue
+			}
+			if newNextLSN <= pc.startLSN {
+				// pc.logger.Info("Ignoring consume offset smaller than startOffset",
+				// 	zap.String("partitionName", pc.p.Name),
+				// 	zap.Uint64("newNextLSN", newNextLSN),
+				// 	zap.Uint("startLSN", uint(pc.startLSN)))
 				continue
 			}
 			if newNextLSN == pc.nextLSN {
-				// pc.logger.Info("No new safe consume offset",
+				// pc.logger.Info("Ignoring consume notification equal to last offset",
 				// 	zap.String("partitionName", pc.p.Name),
-				// 	zap.Uint64("newNextOffset", newNextOffset),
-				// 	zap.Uint("startOffset", uint(pc.startOffset)))
+				// 	zap.Uint64("newNextLSN", newNextLSN))
 				continue
 			}
-			pc.logger.Info("Sending safe consume offset",
-				zap.String("partitionName", pc.p.Name),
-				zap.Uint64("newNextLSN", newNextLSN))
+			// pc.logger.Info("Sending safe consume offset",
+			// 	zap.String("partitionName", pc.p.Name),
+			// 	zap.Uint64("newNextLSN", newNextLSN))
 			pc.sendResponse(&pb.Response{
 				Response: &pb.Response_ConsumeResponse{
 					ConsumeResponse: &pb.ConsumeResponse{
@@ -101,6 +115,14 @@ func (pc *PartitionConsumer) waitBeforeCheckForNew() {
 }
 
 func (pc *PartitionConsumer) Close() error {
+	pc.logger.Info(("Closing consumption"))
+	pc.AliveLock.Lock()
+	defer pc.AliveLock.Unlock()
+	if pc.Alive {
+		pc.Alive = false
+	} else {
+		return nil
+	}
 	close(pc.quit)
 	return nil
 }

@@ -32,7 +32,7 @@ func (client *Client) NewConsumer(partitionName string, startLSN uint64) (*Consu
 	}
 	consumer := &Consumer{
 		client:        client,
-		conn:          client.Conn,
+		conn:          client.conn,
 		logger:        client.logger,
 		partitionName: partitionName,
 		done:          make(chan struct{}),

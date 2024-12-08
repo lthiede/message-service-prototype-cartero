@@ -17,6 +17,9 @@ type PartitionManager struct {
 	quit         chan struct{}
 }
 
+const WriteQuorum = 3
+const AckQuorum = 2
+
 func New(partitionNames []string, logAddresses []string, logger *zap.Logger) (*PartitionManager, error) {
 	partitions := map[string]*partition.Partition{}
 	for _, partitionName := range partitionNames {
@@ -35,19 +38,73 @@ func New(partitionNames []string, logAddresses []string, logger *zap.Logger) (*P
 	return pm, nil
 }
 
-func (pm *PartitionManager) CreatePartition(partitionName string) error {
+func (pm *PartitionManager) CreatePartition(partitionName string, numPartitions uint32) error {
 	pm.logger.Info("Received partition create request", zap.String("partitionName", partitionName))
+	logAddressMapping, err := pm.shittyLogNodeLoadBalancing(numPartitions)
+	if err != nil {
+		return fmt.Errorf("error mapping partitions to log nodes: %v", err)
+	}
+	for i := range numPartitions {
+		name := fmt.Sprintf("%s%d", partitionName, i)
+		err := pm.createPartition(name, logAddressMapping[i])
+		if err != nil {
+			return fmt.Errorf("error creating partitions: %v", err)
+		}
+	}
+	return nil
+}
+
+func (pm *PartitionManager) shittyLogNodeLoadBalancing(numPartitions uint32) ([][]string, error) {
+	if numPartitions*WriteQuorum%uint32(len(pm.logAddresses)) == 0 {
+		return nil, errors.New("creating a number of partitions that can't be evenly distributed on the log nodes is not supported")
+	}
+	logAddressMapping := make([][]string, numPartitions)
+	for i := range numPartitions {
+		logAddressMapping[i] = pm.logAddresses[i*WriteQuorum : (i+1)*WriteQuorum]
+	}
+	return logAddressMapping, nil
+}
+
+func (pm *PartitionManager) createPartition(name string, logAddresses []string) error {
 	pm.rwMutex.Lock()
 	defer pm.rwMutex.Unlock()
-	if _, ok := pm.partitions[partitionName]; ok {
-		pm.logger.Warn("Tried to create partition that already existed", zap.String("partitionName", partitionName))
+	if _, ok := pm.partitions[name]; ok {
+		pm.logger.Warn("Tried to create partition that already existed", zap.String("partitionName", name))
 		return nil
 	}
-	p, err := partition.New(partitionName, pm.logAddresses, pm.logger)
+	p, err := partition.New(name, logAddresses, pm.logger)
 	if err != nil {
-		return fmt.Errorf("error creating new partition: %v", err)
+		return fmt.Errorf("error creating partition %s: %v", name, err)
 	}
-	pm.partitions[partitionName] = p
+	pm.partitions[name] = p
+	return nil
+}
+
+func (pm *PartitionManager) DeletePartition(partitionName string, numPartitions uint32) error {
+	pm.logger.Info("Received partition delete request", zap.String("partitionName", partitionName))
+	for i := range numPartitions {
+		name := fmt.Sprintf("%s%d", partitionName, i)
+		err := pm.deletePartition(name)
+		if err != nil {
+			return fmt.Errorf("error deleting partitions: %v", err)
+		}
+	}
+	return nil
+}
+
+func (pm *PartitionManager) deletePartition(name string) error {
+	pm.rwMutex.Lock()
+	defer pm.rwMutex.Unlock()
+	p, ok := pm.partitions[name]
+	if !ok {
+		pm.logger.Warn("Tried to delete partition that (already) doesn't exist", zap.String("partitionName", name))
+		return nil
+	}
+	delete(pm.partitions, name)
+	err := p.Close()
+	if err != nil {
+		return fmt.Errorf("error closing partition %s: %v", name, err)
+	}
 	return nil
 }
 

@@ -3,7 +3,6 @@ package client
 import (
 	"bytes"
 	"fmt"
-	"net"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,36 +13,39 @@ import (
 )
 
 var MaxPublishDelay = 50 * time.Millisecond
-var MaxBatchSize = 524288
+var MaxBatchSize uint32 = 524288
 var MaxMessageSize = 3800
 
 type Producer struct {
 	client                *Client
-	conn                  net.Conn
-	connWriteMutex        *sync.Mutex
-	logger                *zap.Logger
 	partitionName         string
 	messages              [][]byte
 	endOffsetsExclusively []uint32
-	payloadSize           uint32
 	epoch                 int
 	lock                  sync.Mutex
 	batchId               uint64        // implicitly starts at 0
 	batchIdUnacknowledged atomic.Uint64 // implicitly starts at 0
 	lastLSNPlus1          atomic.Uint64 // implicitly starts at 0
 	numMessagesAck        atomic.Uint64 // implicitly starts at 0
-	Error                 chan ProduceError
+	Error                 chan ProducerError
 	Acks                  chan uint64
 	returnAcksOnChan      bool
 	done                  chan struct{}
+	// for measuring latencies
+	measureLatencies  atomic.Bool
+	waiting           atomic.Bool
+	modulo            uint64
+	waitingForBatchId uint64
+	sendTimes         []time.Time
+	ackTimes          []time.Time
 }
 
-type ProduceError struct {
+type ProducerError struct {
 	Messages [][]byte
 	Err      error
 }
 
-type ProduceAck struct {
+type ProducerAck struct {
 	BatchId        uint64
 	NumMessagesAck uint64
 }
@@ -56,12 +58,9 @@ func (client *Client) NewProducer(partitionName string, ReturnAcksOnChan bool) (
 	}
 	p = &Producer{
 		client:           client,
-		conn:             client.Conn,
-		connWriteMutex:   &client.connWriteMutex,
-		logger:           client.logger,
 		partitionName:    partitionName,
 		messages:         make([][]byte, 0, 137),
-		Error:            make(chan ProduceError),
+		Error:            make(chan ProducerError),
 		Acks:             make(chan uint64),
 		returnAcksOnChan: ReturnAcksOnChan,
 		done:             make(chan struct{}),
@@ -74,13 +73,18 @@ func (client *Client) NewProducer(partitionName string, ReturnAcksOnChan bool) (
 	return p, nil
 }
 
-func (p *Producer) AddBatch(message []byte) error {
+func (p *Producer) AddMessage(message []byte) error {
 	if len(message) > MaxMessageSize {
 		return fmt.Errorf("to many bytes in message, max number of bytes is %d", MaxMessageSize)
 	}
 	p.lock.Lock()
 	defer p.lock.Unlock()
-	if int(p.payloadSize)+len(message) > MaxBatchSize {
+	var oldPayloadSize uint32
+	if len(p.endOffsetsExclusively) > 0 {
+		oldPayloadSize = p.endOffsetsExclusively[len(p.endOffsetsExclusively)-1]
+	}
+	newPayloadSize := oldPayloadSize + uint32(len(message))
+	if newPayloadSize > MaxBatchSize {
 		err := p.sendBatch()
 		if err != nil {
 			return fmt.Errorf("failed to send batch: %v", err)
@@ -88,8 +92,7 @@ func (p *Producer) AddBatch(message []byte) error {
 		p.epoch++
 	}
 	p.messages = append(p.messages, message)
-	p.payloadSize += uint32(len(message))
-	p.endOffsetsExclusively = append(p.endOffsetsExclusively, p.payloadSize)
+	p.endOffsetsExclusively = append(p.endOffsetsExclusively, newPayloadSize)
 	if len(p.messages) == 1 {
 		go p.scheduleSend(p.epoch)
 	}
@@ -103,7 +106,7 @@ func (p *Producer) scheduleSend(epoch int) {
 	if p.epoch == epoch {
 		err := p.sendBatch()
 		if err != nil {
-			p.Error <- ProduceError{
+			p.Error <- ProducerError{
 				Messages: p.messages,
 				Err:      fmt.Errorf("failed to send batch: %v", err),
 			}
@@ -126,28 +129,42 @@ func (p *Producer) sendBatch() error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal batch: %v", err)
 	}
-	p.connWriteMutex.Lock()
-	_, err = p.conn.Write(wireMessage.Bytes())
+	p.client.connWriteMutex.Lock()
+	if p.measureLatencies.Load() && !p.waiting.Load() && p.batchId%p.modulo == 0 {
+		p.waitingForBatchId = p.batchId
+		p.waiting.Store(true)
+		p.sendTimes = append(p.sendTimes, time.Now())
+	}
+	_, err = p.client.conn.Write(wireMessage.Bytes())
 	if err != nil {
 		return fmt.Errorf("failed to send produce request over wire: %v", err)
 	}
 	for _, message := range p.messages {
-		_, err = p.conn.Write(message)
+		_, err = p.client.conn.Write(message)
 		if err != nil {
 			return fmt.Errorf("Failed to send produce payload over wire: %v", err)
 		}
 	}
-	p.connWriteMutex.Unlock()
+	p.client.connWriteMutex.Unlock()
 	p.batchId++
 	p.endOffsetsExclusively = nil
 	p.messages = nil
-	p.payloadSize = 0
 	return nil
 }
 
 func (p *Producer) UpdateAcknowledged(ack *pb.ProduceAck) {
+	expectedBatchId := p.batchIdUnacknowledged.Load()
+	if expectedBatchId != ack.BatchId {
+		p.Error <- ProducerError{
+			Err: fmt.Errorf("Received wrong ack. expected %d, got %d", expectedBatchId, ack.BatchId),
+		}
+	}
+	if p.measureLatencies.Load() && p.waiting.Load() && p.waitingForBatchId == p.batchId {
+		p.ackTimes = append(p.ackTimes, time.Now())
+		p.waiting.Store(false)
+	}
 	p.batchIdUnacknowledged.Store(ack.BatchId + 1)
-	p.lastLSNPlus1.Store(ack.StartLsn + uint64(ack.NumMessages) + 1)
+	p.lastLSNPlus1.Store(ack.StartLsn + uint64(ack.NumMessages))
 	newNumMessagesAck := p.numMessagesAck.Load() + uint64(ack.NumMessages)
 	p.numMessagesAck.Store(newNumMessagesAck)
 	// this can block the main loop for receiving messages
@@ -168,8 +185,22 @@ func (p *Producer) LastLSNPlus1() uint64 {
 	return p.lastLSNPlus1.Load()
 }
 
+func (p *Producer) StartMeasuringLatencies(modulo uint64) {
+	p.measureLatencies.Store(true)
+	p.modulo = modulo
+}
+
+func (p *Producer) StopMeasuringLatencies() []time.Duration {
+	p.measureLatencies.Store(false)
+	latencies := make([]time.Duration, len(p.ackTimes))
+	for i, ackTime := range p.ackTimes {
+		latencies[i] = ackTime.Sub(p.sendTimes[i])
+	}
+	return latencies
+}
+
 func (p *Producer) Close() error {
-	p.logger.Info("Finished produce call", zap.String("partitionName", p.partitionName))
+	p.client.logger.Info("Finished produce call", zap.String("partitionName", p.partitionName))
 
 	p.client.producersRWMutex.Lock()
 	delete(p.client.producers, p.partitionName)

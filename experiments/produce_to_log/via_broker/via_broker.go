@@ -237,9 +237,9 @@ warmup:
 			}
 		}
 	}
-	log.Println("Starting experiment")
 	startNumMessages := producer.NumMessagesAck()
 	numMeasurements := int(experimentDuration.Seconds() / measurementPeriod.Seconds())
+	log.Printf("Starting experiment with %d measurement periods of %f seconds\n", numMeasurements, measurementPeriod.Seconds())
 	messagesPerSecondMeasurements := make([]uint64, numMeasurements)
 	producer.StartMeasuringLatencies(100)
 	for i := range numMeasurements {
@@ -247,7 +247,6 @@ warmup:
 		start := time.Now()
 	experiment:
 		for {
-			log.Println("Starting measurement period")
 			select {
 			case <-periodFinished:
 				break experiment

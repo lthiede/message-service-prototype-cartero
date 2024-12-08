@@ -62,6 +62,7 @@ func (c *Connection) handleRequests() {
 				produceReq := req.ProduceRequest
 				numMessages := uint32(len(produceReq.EndOffsetsExclusively))
 				numBytes := produceReq.EndOffsetsExclusively[numMessages-1]
+				c.logger.Info("Received produce request", zap.Uint32("numMessages", numMessages), zap.Uint32("numBytes", numBytes))
 				payload := make([]byte, numBytes)
 				for i := 0; i < int(numBytes); {
 					n, err := c.conn.Read(payload[i:])

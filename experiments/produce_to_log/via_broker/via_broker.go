@@ -160,6 +160,7 @@ func oneRun(partitions int, clientsPerPartition int) (*Result, error) {
 		if !ok {
 			return nil, errors.New("one client wasn't successful")
 		}
+		fmt.Println("Received client result")
 		if len(clientResult.MessagesPerSecondMeasurements) != numMeasurements {
 			return nil, fmt.Errorf("client returned %d measurements but expected %d", len(clientResult.MessagesPerSecondMeasurements), numMeasurements)
 		}
@@ -209,17 +210,20 @@ func oneClient(partitionName string, logName string, messagesSent chan<- clientR
 	logger, err := config.Build()
 	if err != nil {
 		fmt.Printf("Error building logger: %v\n", err)
+		close(messagesSent)
 		return
 	}
 	client, err := client.New(*sFlag, logger)
 	if err != nil {
 		fmt.Printf("Error creating client: %v\n", err)
+		close(messagesSent)
 		return
 	}
 	defer client.Close()
 	producer, err := client.NewProducer(partitionName, false)
 	if err != nil {
 		fmt.Printf("Error creating producer: %v\n", err)
+		close(messagesSent)
 		return
 	}
 	defer producer.Close()

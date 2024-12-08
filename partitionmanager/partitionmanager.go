@@ -17,7 +17,7 @@ type PartitionManager struct {
 	quit         chan struct{}
 }
 
-const WriteQuorum = 3
+const WriteQuorum uint32 = 3
 const AckQuorum = 2
 
 func New(partitionNames []string, logAddresses []string, logger *zap.Logger) (*PartitionManager, error) {
@@ -55,7 +55,11 @@ func (pm *PartitionManager) CreatePartition(partitionName string, numPartitions 
 }
 
 func (pm *PartitionManager) shittyLogNodeLoadBalancing(numPartitions uint32) ([][]string, error) {
-	if numPartitions*WriteQuorum%uint32(len(pm.logAddresses)) != 0 {
+	writeQuorum := WriteQuorum
+	if uint32(len(pm.logAddresses)) < WriteQuorum {
+		writeQuorum = 1
+	}
+	if numPartitions*writeQuorum%uint32(len(pm.logAddresses)) != 0 {
 		return nil,
 			fmt.Errorf("creating a number of partitions that can't be evenly distributed on the log nodes is not supported. %d partitions, %d write quorum, %d log nodes",
 				numPartitions,
@@ -64,7 +68,9 @@ func (pm *PartitionManager) shittyLogNodeLoadBalancing(numPartitions uint32) ([]
 	}
 	logAddressMapping := make([][]string, numPartitions)
 	for i := range numPartitions {
-		logAddressMapping[i] = pm.logAddresses[i*WriteQuorum : (i+1)*WriteQuorum]
+		startIndex := i * writeQuorum % uint32(len(pm.logAddresses))
+		endIndex := startIndex + writeQuorum
+		logAddressMapping[i] = pm.logAddresses[startIndex:endIndex]
 	}
 	return logAddressMapping, nil
 }

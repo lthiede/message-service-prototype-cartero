@@ -90,6 +90,7 @@ func main() {
 	// }
 	results := map[int]map[int]Result{}
 	for _, partitions := range partitionsFlag {
+		results[partitions] = map[int]Result{}
 		for _, clientsPerPartition := range producersPerPartitionFlag {
 			result, err := oneRun(partitions, clientsPerPartition)
 			if err != nil {

@@ -143,14 +143,14 @@ func (p *Producer) sendBatch() error {
 	if err != nil {
 		return fmt.Errorf("failed to send produce request over wire: %v", err)
 	} else {
-		p.client.logger.Info("Sent produce proto header", zap.Int("numBytes", len(header)), zap.Int("numMessages", len(p.messages)))
+		// p.client.logger.Info("Sent produce proto header", zap.Int("numBytes", len(header)), zap.Int("numMessages", len(p.messages)))
 	}
 	for _, message := range p.messages {
 		_, err = p.client.conn.Write(message)
 		if err != nil {
 			return fmt.Errorf("Failed to send produce payload over wire: %v", err)
 		} else {
-			p.client.logger.Info("Sent actual message bytes", zap.Int("numBytes", len(message)))
+			// p.client.logger.Info("Sent actual message bytes", zap.Int("numBytes", len(message)))
 		}
 	}
 	p.client.connWriteMutex.Unlock()

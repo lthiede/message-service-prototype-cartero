@@ -20,8 +20,8 @@ import (
 )
 
 const payloadLength = 3800
-const warmupDuration = 60 * time.Second
-const experimentDuration = 60 * time.Second
+const warmupDuration = 5 * time.Second
+const experimentDuration = 20 * time.Second
 const measurementPeriod = 10 * time.Second
 const basePartitionName = "partition"
 

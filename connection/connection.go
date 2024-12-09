@@ -6,7 +6,6 @@ import (
 	"math/rand"
 	"net"
 	"sync"
-	"time"
 
 	"github.com/lthiede/cartero/consume"
 	"github.com/lthiede/cartero/partition"
@@ -38,8 +37,6 @@ var connectionAdjectives []string = []string{
 	"awesome",
 	"draining",
 }
-
-const timeout time.Duration = 60 * time.Second
 
 type Connection struct {
 	conn               net.Conn
@@ -82,7 +79,6 @@ func (c *Connection) handleRequests() {
 			c.logger.Info("Stop handling requests", zap.String("name", c.name))
 			return
 		default:
-			c.conn.SetDeadline(time.Now().Add(timeout))
 			request := &pb.Request{}
 			err := protodelim.UnmarshalFrom(&readertobytereader.ReaderByteReader{Reader: c.conn}, request)
 			if err != nil {

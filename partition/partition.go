@@ -37,12 +37,16 @@ type AppendBatchRequest struct {
 	BatchId               uint64
 	EndOffsetsExclusively []uint32
 	Payload               []byte
+	Alive                 *bool
+	AliveLock             *sync.RWMutex
 	ProduceResponse       chan *pb.Response
 }
 
 type outstandingAck struct {
 	ack             *pb.ProduceAck
 	produceResponse chan *pb.Response
+	alive           *bool
+	aliveLock       *sync.RWMutex
 }
 
 type ConsumeRequest struct {
@@ -118,6 +122,8 @@ func (p *Partition) logInteractions() {
 					PartitionName: p.Name,
 				},
 				produceResponse: abr.ProduceResponse,
+				alive:           abr.Alive,
+				aliveLock:       abr.AliveLock,
 			}
 			lsnAfterLSNForNextAck += uint64(numMessages)
 			lsnAfterCommittedLSN, err := p.logClient.AppendAsync(abr.Payload, abr.EndOffsetsExclusively)
@@ -164,11 +170,15 @@ func (p *Partition) handleAcks() {
 		p.nextLSNCommitted.Store(lsnAfterCommittedLSN)
 		if longestOutstandingAck != nil {
 			if lsnAfterCommittedLSN >= longestOutstandingAck.ack.StartLsn+uint64(longestOutstandingAck.ack.NumMessages) {
-				longestOutstandingAck.produceResponse <- &pb.Response{
-					Response: &pb.Response_ProduceAck{
-						ProduceAck: longestOutstandingAck.ack,
-					},
+				longestOutstandingAck.aliveLock.RLock()
+				if *longestOutstandingAck.alive {
+					longestOutstandingAck.produceResponse <- &pb.Response{
+						Response: &pb.Response_ProduceAck{
+							ProduceAck: longestOutstandingAck.ack,
+						},
+					}
 				}
+				longestOutstandingAck.aliveLock.RUnlock()
 			} else {
 				continue
 			}
@@ -178,11 +188,15 @@ func (p *Partition) handleAcks() {
 			select {
 			case longestOutstandingAck = <-p.outstandingAcks:
 				if lsnAfterCommittedLSN >= longestOutstandingAck.ack.StartLsn+uint64(longestOutstandingAck.ack.NumMessages) {
-					longestOutstandingAck.produceResponse <- &pb.Response{
-						Response: &pb.Response_ProduceAck{
-							ProduceAck: longestOutstandingAck.ack,
-						},
+					longestOutstandingAck.aliveLock.RLock()
+					if *longestOutstandingAck.alive {
+						longestOutstandingAck.produceResponse <- &pb.Response{
+							Response: &pb.Response_ProduceAck{
+								ProduceAck: longestOutstandingAck.ack,
+							},
+						}
 					}
+					longestOutstandingAck.aliveLock.RUnlock()
 				} else {
 					break moreAcks
 				}

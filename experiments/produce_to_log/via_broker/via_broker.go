@@ -277,6 +277,7 @@ warmup:
 		fmt.Printf("Producer had asynchronous error: %v", err.Err)
 		close(messagesSent)
 		return
+	default:
 	}
 	messagesSent <- clientResult{
 		MessagesPerSecondMeasurements: messagesPerSecondMeasurements,

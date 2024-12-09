@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/lthiede/cartero/consume"
@@ -46,9 +47,10 @@ type Connection struct {
 	partitionCache     map[string]*partition.Partition
 	partitionManager   *partitionmanager.PartitionManager
 	partitionConsumers map[string]*consume.PartitionConsumer
+	alive              bool
+	aliveLock          sync.RWMutex
 	responses          chan *pb.Response
 	logger             *zap.Logger
-	acks               chan *pb.ProduceAck
 	quit               chan struct{}
 }
 
@@ -62,9 +64,9 @@ func New(conn net.Conn, partitionManager *partitionmanager.PartitionManager, log
 		partitionCache:     make(map[string]*partition.Partition),
 		partitionManager:   partitionManager,
 		partitionConsumers: make(map[string]*consume.PartitionConsumer),
+		alive:              true,
 		responses:          make(chan *pb.Response),
 		logger:             logger,
-		acks:               make(chan *pb.ProduceAck),
 		quit:               make(chan struct{}),
 	}
 	go c.handleRequests()
@@ -85,7 +87,7 @@ func (c *Connection) handleRequests() {
 			err := protodelim.UnmarshalFrom(&readertobytereader.ReaderByteReader{Reader: c.conn}, request)
 			if err != nil {
 				c.logger.Error("Failed to unmarshal message", zap.Error(err), zap.String("name", c.name))
-				return
+				c.Close()
 			}
 			switch req := request.Request.(type) {
 			case *pb.Request_ProduceRequest:
@@ -98,7 +100,7 @@ func (c *Connection) handleRequests() {
 					n, err := c.conn.Read(payload[i:])
 					if err != nil {
 						c.logger.Error("Error reading produce payload", zap.Error(err), zap.String("name", c.name))
-						return
+						c.Close()
 					}
 					i += n
 				}
@@ -135,6 +137,8 @@ func (c *Connection) handleRequests() {
 							BatchId:               produceReq.BatchId,
 							EndOffsetsExclusively: produceReq.EndOffsetsExclusively,
 							Payload:               payload,
+							Alive:                 &c.alive,
+							AliveLock:             &c.aliveLock,
 							ProduceResponse:       c.responses,
 						},
 					}
@@ -184,7 +188,7 @@ func (c *Connection) handleRequests() {
 				err = c.SendResponse(response)
 				if err != nil {
 					c.logger.Error("Failed to send create partition response", zap.Error(err), zap.String("name", c.name))
-					return
+					c.Close()
 				}
 			case *pb.Request_DeletePartitionRequest:
 				deletePartitionRequest := req.DeletePartitionRequest
@@ -206,11 +210,11 @@ func (c *Connection) handleRequests() {
 				err = c.SendResponse(response)
 				if err != nil {
 					c.logger.Error("Failed to send delete partition response", zap.Error(err), zap.String("name", c.name))
-					return
+					c.Close()
 				}
 			default:
 				c.logger.Error("Request type not recognized", zap.String("name", c.name))
-				return
+				c.Close()
 			}
 		}
 	}
@@ -226,6 +230,7 @@ func (c *Connection) SendResponse(res *pb.Response) error {
 	if err != nil {
 		return err
 	}
+	return nil
 }
 
 func (c *Connection) handleResponses() {
@@ -237,6 +242,7 @@ func (c *Connection) handleResponses() {
 			err := c.SendResponse(response)
 			if err != nil {
 				c.logger.Error("Failed to asynchronously send response", zap.Error(err))
+				c.Close()
 			}
 		}
 	}
@@ -245,6 +251,13 @@ func (c *Connection) handleResponses() {
 
 func (c *Connection) Close() error {
 	c.logger.Info("Closing connection", zap.String("name", c.name))
+	c.aliveLock.Lock()
+	if !c.alive {
+		c.aliveLock.Unlock()
+		return nil
+	}
+	c.alive = false
+	c.aliveLock.Unlock()
 	close(c.quit)
 	for _, pc := range c.partitionConsumers {
 		return pc.Close()

@@ -20,7 +20,7 @@ type update struct {
 
 type PartitionConsumer struct {
 	p              *partition.Partition
-	sendResponse   func(*pb.Response)
+	sendResponse   func(*pb.Response) error
 	startLSN       uint64
 	nextLSN        uint64
 	minNumMessages int
@@ -32,7 +32,7 @@ type PartitionConsumer struct {
 	quit           chan struct{}
 }
 
-func NewPartitionConsumer(p *partition.Partition, sendResponse func(*pb.Response), startLSN uint64, minNumMessages int, logger *zap.Logger) (*PartitionConsumer, error) {
+func NewPartitionConsumer(p *partition.Partition, sendResponse func(*pb.Response) error, startLSN uint64, minNumMessages int, logger *zap.Logger) (*PartitionConsumer, error) {
 	pc := &PartitionConsumer{
 		p:              p,
 		sendResponse:   sendResponse,
@@ -95,12 +95,16 @@ func (pc *PartitionConsumer) handleConsume() {
 			// pc.logger.Info("Sending safe consume offset",
 			// 	zap.String("partitionName", pc.p.Name),
 			// 	zap.Uint64("newNextLSN", newNextLSN))
-			pc.sendResponse(&pb.Response{
+			err := pc.sendResponse(&pb.Response{
 				Response: &pb.Response_ConsumeResponse{
 					ConsumeResponse: &pb.ConsumeResponse{
 						EndOfSafeLsnsExclusively: newNextLSN,
 						PartitionName:            pc.p.Name,
 					}}})
+			if err != nil {
+				pc.Close()
+				continue
+			}
 			pc.nextLSN = newNextLSN
 		}
 	}

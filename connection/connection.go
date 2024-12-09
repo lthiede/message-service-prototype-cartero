@@ -166,6 +166,7 @@ func (c *Connection) handleRequests() {
 				c.logger.Info("Registered partition consumer", zap.String("partitionName", consumeReq.PartitionName), zap.String("name", c.name))
 			case *pb.Request_CreatePartitionRequest:
 				createPartitionRequest := req.CreatePartitionRequest
+				c.logger.Info("Received create partition request", zap.String("name", c.name), zap.String("partitionName", createPartitionRequest.TopicName))
 				err := c.partitionManager.CreatePartition(createPartitionRequest.TopicName, createPartitionRequest.NumPartitions)
 				if err != nil {
 					c.logger.Error("Failed to create partition", zap.Error(err), zap.String("name", c.name))
@@ -180,7 +181,11 @@ func (c *Connection) handleRequests() {
 						},
 					},
 				}
-				c.SendResponse(response)
+				err = c.SendResponse(response)
+				if err != nil {
+					c.logger.Error("Failed to send create partition response", zap.Error(err), zap.String("name", c.name))
+					return
+				}
 			case *pb.Request_DeletePartitionRequest:
 				deletePartitionRequest := req.DeletePartitionRequest
 				c.logger.Info("Received delete partition request", zap.String("name", c.name), zap.String("partitionName", deletePartitionRequest.TopicName))
@@ -198,7 +203,11 @@ func (c *Connection) handleRequests() {
 						},
 					},
 				}
-				c.SendResponse(response)
+				err = c.SendResponse(response)
+				if err != nil {
+					c.logger.Error("Failed to send delete partition response", zap.Error(err), zap.String("name", c.name))
+					return
+				}
 			default:
 				c.logger.Error("Request type not recognized", zap.String("name", c.name))
 				return
@@ -207,19 +216,15 @@ func (c *Connection) handleRequests() {
 	}
 }
 
-func (c *Connection) SendResponse(res *pb.Response) {
+func (c *Connection) SendResponse(res *pb.Response) error {
 	wireMessage := &bytes.Buffer{}
 	_, err := protodelim.MarshalTo(wireMessage, res)
 	if err != nil {
-		c.logger.Error("Failed to marshal response",
-			zap.Error(err), zap.String("name", c.name))
-		return
+		return err
 	}
 	_, err = c.conn.Write(wireMessage.Bytes())
 	if err != nil {
-		c.logger.Error("Failed to send response",
-			zap.Error(err), zap.String("name", c.name))
-		return
+		return err
 	}
 }
 
@@ -229,7 +234,10 @@ func (c *Connection) handleResponses() {
 		case <-c.quit:
 			return
 		case response := <-c.responses:
-			c.SendResponse(response)
+			err := c.SendResponse(response)
+			if err != nil {
+				c.logger.Error("Failed to asynchronously send response", zap.Error(err))
+			}
 		}
 	}
 

@@ -238,6 +238,8 @@ warmup:
 		default:
 			err := producer.AddMessage(payload)
 			if err != nil {
+				fmt.Printf("Error adding message: %v\n", err)
+				close(messagesSent)
 				return
 			}
 		}
@@ -259,6 +261,8 @@ warmup:
 			default:
 				err := producer.AddMessage(payload)
 				if err != nil {
+					fmt.Printf("Error adding message: %v\n", err)
+					close(messagesSent)
 					return
 				}
 			}
@@ -268,6 +272,12 @@ warmup:
 		messagesPerSecondMeasurements[i] = (endNumMessages - startNumMessages) / uint64(duration.Seconds())
 	}
 	latencies := producer.StopMeasuringLatencies()
+	select {
+	case err := <-producer.Error:
+		fmt.Printf("Producer had asynchronous error: %v", err.Err)
+		close(messagesSent)
+		return
+	}
 	messagesSent <- clientResult{
 		MessagesPerSecondMeasurements: messagesPerSecondMeasurements,
 		LatencyMeasurements:           latencies,

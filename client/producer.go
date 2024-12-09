@@ -34,7 +34,6 @@ type Producer struct {
 	// for measuring latencies
 	measureLatencies  atomic.Bool
 	waiting           atomic.Bool
-	modulo            uint64
 	waitingForBatchId uint64
 	sendTimes         []time.Time
 	ackTimes          []time.Time
@@ -133,7 +132,7 @@ func (p *Producer) sendBatch() error {
 		return fmt.Errorf("failed to marshal batch: %v", err)
 	}
 	p.client.connWriteMutex.Lock()
-	if p.measureLatencies.Load() && !p.waiting.Load() && p.batchId%p.modulo == 0 {
+	if p.measureLatencies.Load() && !p.waiting.Load() {
 		p.waitingForBatchId = p.batchId
 		p.waiting.Store(true)
 		p.sendTimes = append(p.sendTimes, time.Now())
@@ -167,7 +166,10 @@ func (p *Producer) UpdateAcknowledged(ack *pb.ProduceAck) {
 			Err: fmt.Errorf("Received wrong ack. expected %d, got %d", expectedBatchId, ack.BatchId),
 		}
 	}
-	if p.measureLatencies.Load() && p.waiting.Load() && p.waitingForBatchId == p.batchId {
+	measure := p.measureLatencies.Load()
+	waiting := p.waiting.Load()
+	waitingFor := p.waitingForBatchId
+	if measure && waiting && waitingFor == ack.BatchId {
 		p.ackTimes = append(p.ackTimes, time.Now())
 		p.waiting.Store(false)
 	}
@@ -193,9 +195,8 @@ func (p *Producer) LastLSNPlus1() uint64 {
 	return p.lastLSNPlus1.Load()
 }
 
-func (p *Producer) StartMeasuringLatencies(modulo uint64) {
+func (p *Producer) StartMeasuringLatencies() {
 	p.measureLatencies.Store(true)
-	p.modulo = modulo
 }
 
 func (p *Producer) StopMeasuringLatencies() []time.Duration {

@@ -88,6 +88,7 @@ func (c *Connection) handleRequests() {
 			if err != nil {
 				c.logger.Error("Failed to unmarshal message", zap.Error(err), zap.String("name", c.name))
 				c.Close()
+				continue
 			}
 			switch req := request.Request.(type) {
 			case *pb.Request_ProduceRequest:
@@ -101,6 +102,7 @@ func (c *Connection) handleRequests() {
 					if err != nil {
 						c.logger.Error("Error reading produce payload", zap.Error(err), zap.String("name", c.name))
 						c.Close()
+						continue
 					}
 					i += n
 				}
@@ -189,6 +191,7 @@ func (c *Connection) handleRequests() {
 				if err != nil {
 					c.logger.Error("Failed to send create partition response", zap.Error(err), zap.String("name", c.name))
 					c.Close()
+					continue
 				}
 			case *pb.Request_DeletePartitionRequest:
 				deletePartitionRequest := req.DeletePartitionRequest
@@ -211,10 +214,12 @@ func (c *Connection) handleRequests() {
 				if err != nil {
 					c.logger.Error("Failed to send delete partition response", zap.Error(err), zap.String("name", c.name))
 					c.Close()
+					continue
 				}
 			default:
 				c.logger.Error("Request type not recognized", zap.String("name", c.name))
 				c.Close()
+				continue
 			}
 		}
 	}
@@ -237,12 +242,14 @@ func (c *Connection) handleResponses() {
 	for {
 		select {
 		case <-c.quit:
+			c.logger.Info("Stop handling responses", zap.String("name", c.name))
 			return
 		case response := <-c.responses:
 			err := c.SendResponse(response)
 			if err != nil {
 				c.logger.Error("Failed to asynchronously send response", zap.Error(err))
 				c.Close()
+				continue
 			}
 		}
 	}
@@ -250,12 +257,12 @@ func (c *Connection) handleResponses() {
 }
 
 func (c *Connection) Close() error {
-	c.logger.Info("Closing connection", zap.String("name", c.name))
 	c.aliveLock.Lock()
 	if !c.alive {
 		c.aliveLock.Unlock()
 		return nil
 	}
+	c.logger.Info("Closing connection", zap.String("name", c.name))
 	c.alive = false
 	c.aliveLock.Unlock()
 	close(c.quit)

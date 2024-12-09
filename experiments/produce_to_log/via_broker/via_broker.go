@@ -246,7 +246,7 @@ warmup:
 	numMeasurements := int(experimentDuration.Seconds() / measurementPeriod.Seconds())
 	log.Printf("Starting experiment with %d measurement periods of %f seconds\n", numMeasurements, measurementPeriod.Seconds())
 	messagesPerSecondMeasurements := make([]uint64, numMeasurements)
-	producer.StartMeasuringLatencies(100)
+	producer.StartMeasuringLatencies(10)
 	for i := range numMeasurements {
 		log.Printf("iteration %d\n", i)
 		periodFinished := timer(measurementPeriod)

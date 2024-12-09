@@ -85,7 +85,7 @@ func (p *Producer) AddMessage(message []byte) error {
 	}
 	newPayloadSize := oldPayloadSize + uint32(len(message))
 	if newPayloadSize > MaxBatchSize {
-		p.client.logger.Info("Max batch size reached send")
+		// p.client.logger.Info("Max batch size reached send")
 		err := p.sendBatch()
 		if err != nil {
 			return fmt.Errorf("failed to send batch: %v", err)
@@ -106,7 +106,7 @@ func (p *Producer) scheduleSend(epoch int) {
 	p.lock.Lock()
 	defer p.lock.Unlock()
 	if p.epoch == epoch {
-		p.client.logger.Info("Scheduled send")
+		// p.client.logger.Info("Scheduled send")
 		err := p.sendBatch()
 		if err != nil {
 			p.Error <- ProducerError{

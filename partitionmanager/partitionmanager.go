@@ -69,7 +69,7 @@ func (pm *PartitionManager) shittyLogNodeLoadBalancing(numPartitions uint32) ([]
 	logAddressMapping := make([][]string, numPartitions)
 	for i := range numPartitions {
 		startIndex := i * writeQuorum % uint32(len(pm.logAddresses))
-		endIndex := startIndex + writeQuorum
+		endIndex := (startIndex + writeQuorum) % uint32(len(pm.logAddresses))
 		logAddressMapping[i] = pm.logAddresses[startIndex:endIndex]
 	}
 	return logAddressMapping, nil

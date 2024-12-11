@@ -14,15 +14,12 @@ import (
 	"time"
 
 	"github.com/lthiede/cartero/client"
-	"github.com/lthiede/cartero/server"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
 
 const payloadLength = 3800
-const warmupDuration = 60 * time.Second
-const experimentDuration = 60 * time.Second
 const measurementPeriod = 10 * time.Second
 const basePartitionName = "partition"
 
@@ -33,8 +30,11 @@ var logAddressFlag stringSlice
 var partitionsFlag intSlice
 var producersPerPartitionFlag intSlice
 var messagesPerSecondFlag intSlice
+var eFlag = flag.Int("e", 60, "experiment and warmup duration")
 var sFlag = flag.String("s", "localhost:8080", "server address")
 var bFlag = flag.Bool("b", false, "create the server")
+
+var experimentDuration time.Duration
 
 func (n *stringSlice) String() string {
 	return fmt.Sprintf("%v", []string(*n))
@@ -79,53 +79,45 @@ func main() {
 	flag.Var(&messagesPerSecondFlag, "m", "target messages per second")
 	flag.Var(&producersPerPartitionFlag, "n", "number of producers per partition")
 	flag.Parse()
-	if *bFlag {
-		logger, err := zap.NewDevelopment()
-		if err != nil {
-			fmt.Printf("Failed to create logger: %v", err)
-			return
-		}
-		server, err := server.New([]string{}, *sFlag, logAddressFlag, logger)
-		if err != nil {
-			fmt.Printf("Failed to create server: %v", err)
-			return
-		}
-		defer server.Close()
-	}
-	results := map[int]map[int]map[int]Result{}
+	experimentDuration = time.Duration(*eFlag * int(time.Second))
+	// if *bFlag {
+	// 	logger, err := zap.NewDevelopment()
+	// 	if err != nil {
+	// 		fmt.Printf("Failed to create logger: %v", err)
+	// 		return
+	// 	}
+	// 	server, err := server.New([]string{}, *sFlag, logAddressFlag, logger)
+	// 	if err != nil {
+	// 		fmt.Printf("Failed to create server: %v", err)
+	// 		return
+	// 	}
+	// 	defer server.Close()
+	// }
 	for _, messages := range messagesPerSecondFlag {
-		results[messages] = map[int]map[int]Result{}
 		for _, partitions := range partitionsFlag {
-			results[messages][partitions] = map[int]Result{}
 			for _, clientsPerPartition := range producersPerPartitionFlag {
 				result, err := oneRun(partitions, clientsPerPartition, messages)
 				if err != nil {
 					fmt.Printf("Run with %d partitions and %d clients per partitions failed: %v", partitions, clientsPerPartition, err)
 					return
 				}
-				results[messages][partitions][clientsPerPartition] = *result
 				text, err := json.Marshal(result)
 				if err != nil {
 					fmt.Printf("Marshal of results with %d partitions and %d clients per partitions failed: %v", partitions, clientsPerPartition, err)
 					return
 				}
 				fmt.Println(string(text))
+				output, err := os.Create(fmt.Sprintf("results_%d_partitions_%d_clientsXpartition_%d_messagesXs_target.json", partitions, clientsPerPartition, messages))
+				if err != nil {
+					fmt.Printf("Failed to create output file: %v", err)
+					return
+				}
+				_, err = output.Write(text)
+				if err != nil {
+					fmt.Printf("Failed to write results to file: %v", err)
+				}
 			}
 		}
-	}
-	text, err := json.Marshal(results)
-	if err != nil {
-		fmt.Printf("Marshal of results failed: %v", err)
-		return
-	}
-	output, err := os.Create("results.json")
-	if err != nil {
-		fmt.Printf("Failed to create output file: %v", err)
-		return
-	}
-	_, err = output.Write(text)
-	if err != nil {
-		fmt.Printf("Failed to write results to file: %v", err)
 	}
 }
 
@@ -239,16 +231,23 @@ func oneClient(partitionName string, logName string, messages float64, messagesS
 		return
 	}
 	defer producer.Close()
-	waitBetweenMessages := time.Duration(float64(time.Second) / float64(messages))
+	var timeBetweenMessages time.Duration
+	waitBetweenMessages := false
+	if messages != 0 {
+		timeBetweenMessages = time.Duration(float64(time.Second) / messages)
+		waitBetweenMessages = true
+	}
 	log.Println("Starting warmup")
-	warmupFinished := timer(warmupDuration)
+	warmupFinished := timer(experimentDuration)
 warmup:
 	for {
 		select {
 		case <-warmupFinished:
 			break warmup
 		default:
-			time.Sleep(waitBetweenMessages)
+			if waitBetweenMessages {
+				time.Sleep(timeBetweenMessages)
+			}
 			err := producer.AddMessage(payload)
 			if err != nil {
 				fmt.Printf("Error adding message: %v\n", err)
@@ -272,7 +271,9 @@ warmup:
 			case <-periodFinished:
 				break experiment
 			default:
-				time.Sleep(waitBetweenMessages)
+				if waitBetweenMessages {
+					time.Sleep(timeBetweenMessages)
+				}
 				err := producer.AddMessage(payload)
 				if err != nil {
 					fmt.Printf("Error adding message: %v\n", err)

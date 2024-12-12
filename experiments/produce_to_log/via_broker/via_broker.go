@@ -6,7 +6,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"log"
 	"math"
 	"os"
 	"slices"
@@ -213,20 +212,20 @@ func oneClient(partitionName string, logName string, messages float64, messagesS
 	config.OutputPaths = []string{logName}
 	logger, err := config.Build()
 	if err != nil {
-		fmt.Printf("Error building logger: %v\n", err)
+		logger.Error("Error building logger", zap.Error(err))
 		close(messagesSent)
 		return
 	}
 	client, err := client.New(*sFlag, logger)
 	if err != nil {
-		fmt.Printf("Error creating client: %v\n", err)
+		logger.Error("Error creating client", zap.Error(err))
 		close(messagesSent)
 		return
 	}
 	defer client.Close()
 	producer, err := client.NewProducer(partitionName, false)
 	if err != nil {
-		fmt.Printf("Error creating producer: %v\n", err)
+		logger.Error("Error creating producer", zap.Error(err))
 		close(messagesSent)
 		return
 	}
@@ -237,7 +236,7 @@ func oneClient(partitionName string, logName string, messages float64, messagesS
 		timeBetweenMessages = time.Duration(float64(time.Second) / messages)
 		waitBetweenMessages = true
 	}
-	log.Println("Starting warmup")
+	logger.Info("Starting warmup", zap.Int("duration", int(experimentDuration.Seconds())), zap.Bool("waitBetweenMessages", waitBetweenMessages))
 	warmupFinished := timer(experimentDuration)
 warmup:
 	for {
@@ -248,9 +247,10 @@ warmup:
 			if waitBetweenMessages {
 				time.Sleep(timeBetweenMessages)
 			}
+			logger.Info("Calling add message")
 			err := producer.AddMessage(payload)
 			if err != nil {
-				fmt.Printf("Error adding message: %v\n", err)
+				logger.Error("Error adding message", zap.Error(err))
 				close(messagesSent)
 				return
 			}
@@ -258,11 +258,11 @@ warmup:
 	}
 	startNumMessages := producer.NumMessagesAck()
 	numMeasurements := int(experimentDuration.Seconds() / measurementPeriod.Seconds())
-	log.Printf("Starting experiment with %d measurement periods of %f seconds\n", numMeasurements, measurementPeriod.Seconds())
+	logger.Info("Starting experiment", zap.Int("numMeasurements", numMeasurements), zap.Float64("measurementPeriod", measurementPeriod.Seconds()))
 	messagesPerSecondMeasurements := make([]uint64, numMeasurements)
 	producer.StartMeasuringLatencies()
 	for i := range numMeasurements {
-		log.Printf("iteration %d\n", i)
+		logger.Info("iteration", zap.Int("num", i))
 		periodFinished := timer(measurementPeriod)
 		start := time.Now()
 	experiment:
@@ -276,7 +276,7 @@ warmup:
 				}
 				err := producer.AddMessage(payload)
 				if err != nil {
-					fmt.Printf("Error adding message: %v\n", err)
+					logger.Error("Error adding message", zap.Error(err))
 					close(messagesSent)
 					return
 				}
@@ -290,7 +290,7 @@ warmup:
 	latencies := producer.StopMeasuringLatencies()
 	select {
 	case err := <-producer.Error:
-		fmt.Printf("Producer had asynchronous error: %v", err.Err)
+		logger.Error("Producer had asynchronous error", zap.Error(err.Err))
 		close(messagesSent)
 		return
 	default:

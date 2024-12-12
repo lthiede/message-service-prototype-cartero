@@ -73,6 +73,7 @@ func New(conn net.Conn, partitionManager *partitionmanager.PartitionManager, log
 }
 
 func (c *Connection) handleRequests() {
+outer_loop:
 	for {
 		select {
 		case <-c.quit:
@@ -98,7 +99,7 @@ func (c *Connection) handleRequests() {
 					if err != nil {
 						c.logger.Error("Error reading produce payload", zap.Error(err), zap.String("name", c.name))
 						c.Close()
-						continue
+						continue outer_loop
 					}
 					i += n
 				}

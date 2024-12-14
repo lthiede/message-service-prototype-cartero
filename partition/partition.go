@@ -3,6 +3,7 @@ package partition
 import (
 	"fmt"
 	"math"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -85,6 +86,8 @@ var MaxCheckLSNDelay = 200 * time.Microsecond
 // Receiving on the channel is not a bottleneck
 func (p *Partition) logInteractions() {
 	p.logger.Info("Start handling produce", zap.String("partitionName", p.Name))
+	appendLatencies := make([]time.Duration, 1000)
+	pollLatencies := make([]time.Duration, 1000)
 	var lsnAfterMostRecentLSN uint64
 	checkScheduled := false
 	for {
@@ -93,6 +96,20 @@ func (p *Partition) logInteractions() {
 			p.logger.Info("Stop handling produce", zap.String("partitionName", p.Name))
 			close(p.newCommittedLSN)
 			close(p.outstandingAcks)
+			slices.Sort(appendLatencies)
+			slices.Sort(pollLatencies)
+			p.logger.Info("Latencies",
+				zap.Float64("appendLatencyP50", pct(appendLatencies, 0.5)),
+				zap.Float64("appendLatencyP90", pct(appendLatencies, 0.9)),
+				zap.Float64("appendLatencyP99", pct(appendLatencies, 0.99)),
+				zap.Float64("appendLatencyP999", pct(appendLatencies, 0.999)),
+				zap.Float64("appendLatencyP9999", pct(appendLatencies, 0.9999)),
+				zap.Float64("pollLatencyP50", pct(pollLatencies, 0.5)),
+				zap.Float64("pollLatencyP90", pct(pollLatencies, 0.9)),
+				zap.Float64("pollLatencyP99", pct(pollLatencies, 0.99)),
+				zap.Float64("pollLatencyP999", pct(pollLatencies, 0.999)),
+				zap.Float64("pollLatencyP9999", pct(pollLatencies, 0.9999)),
+			)
 			return
 		}
 		if abr := lir.AppendBatchRequest; abr != nil {
@@ -109,7 +126,9 @@ func (p *Partition) logInteractions() {
 				aliveLock:       abr.AliveLock,
 			}
 			lsnAfterMostRecentLSN += uint64(numMessages)
+			start := time.Now()
 			lsnAfterCommittedLSN, err := p.logClient.AppendAsync(abr.Payload, abr.EndOffsetsExclusively)
+			appendLatencies = append(appendLatencies, time.Since(start))
 			if err != nil {
 				p.logger.Error("Error appending batch to log", zap.Error(err), zap.String("partitionName", p.Name))
 				return
@@ -132,7 +151,9 @@ func (p *Partition) logInteractions() {
 			}
 		} else if lir.pollCommittedRequest != nil {
 			checkScheduled = false
+			start := time.Now()
 			committedLSN, err := p.logClient.PollCompletion()
+			pollLatencies = append(pollLatencies, time.Since(start))
 			if err != nil {
 				p.logger.Error("Error polling committed LSN", zap.Error(err), zap.String("partitionName", p.Name))
 			}
@@ -152,6 +173,15 @@ func (p *Partition) logInteractions() {
 			p.newCommittedLSN <- committedLSN + 1
 		}
 	}
+}
+
+func pct(latencies []time.Duration, pct float64) float64 {
+	if len(latencies) == 0 {
+		return 0
+	}
+	ordinal := int(math.Ceil(float64(len(latencies)) * pct))
+	ordinalZeroIndexed := ordinal - 1
+	return latencies[ordinalZeroIndexed].Seconds()
 }
 
 func (p *Partition) handleAcks() {

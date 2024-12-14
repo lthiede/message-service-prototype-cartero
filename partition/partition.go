@@ -78,7 +78,7 @@ func New(name string, logAddresses []string, logger *zap.Logger) (*Partition, er
 	return p, nil
 }
 
-var MaxCheckLSNDelay = 50 * time.Millisecond
+var MaxCheckLSNDelay = 200 * time.Microsecond
 
 // TODO: try passing a batch of messages via cgo interface
 // Don't add a channel select to this function

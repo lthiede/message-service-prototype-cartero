@@ -85,7 +85,7 @@ var MaxCheckLSNDelay = 200 * time.Microsecond
 // Receiving on the channel is not a bottleneck
 func (p *Partition) logInteractions() {
 	p.logger.Info("Start handling produce", zap.String("partitionName", p.Name))
-	var lsnAfterLSNForNextAck uint64
+	var lsnAfterMostRecentLSN uint64
 	checkScheduled := false
 	for {
 		lir, ok := <-p.LogInteractionRequests
@@ -96,7 +96,25 @@ func (p *Partition) logInteractions() {
 			return
 		}
 		if abr := lir.AppendBatchRequest; abr != nil {
-			if !checkScheduled {
+			numMessages := uint32(len(abr.EndOffsetsExclusively))
+			p.outstandingAcks <- &outstandingAck{
+				ack: &pb.ProduceAck{
+					BatchId:       abr.BatchId,
+					NumMessages:   numMessages,
+					StartLsn:      lsnAfterMostRecentLSN,
+					PartitionName: p.Name,
+				},
+				produceResponse: abr.ProduceResponse,
+				alive:           abr.Alive,
+				aliveLock:       abr.AliveLock,
+			}
+			lsnAfterMostRecentLSN += uint64(numMessages)
+			lsnAfterCommittedLSN, err := p.logClient.AppendAsync(abr.Payload, abr.EndOffsetsExclusively)
+			if err != nil {
+				p.logger.Error("Error appending batch to log", zap.Error(err), zap.String("partitionName", p.Name))
+				return
+			}
+			if lsnAfterCommittedLSN != lsnAfterMostRecentLSN && !checkScheduled {
 				go func() {
 					time.Sleep(MaxCheckLSNDelay)
 					p.AliveLock.RLock()
@@ -109,24 +127,6 @@ func (p *Partition) logInteractions() {
 				}()
 				checkScheduled = true
 			}
-			numMessages := uint32(len(abr.EndOffsetsExclusively))
-			p.outstandingAcks <- &outstandingAck{
-				ack: &pb.ProduceAck{
-					BatchId:       abr.BatchId,
-					NumMessages:   numMessages,
-					StartLsn:      lsnAfterLSNForNextAck,
-					PartitionName: p.Name,
-				},
-				produceResponse: abr.ProduceResponse,
-				alive:           abr.Alive,
-				aliveLock:       abr.AliveLock,
-			}
-			lsnAfterLSNForNextAck += uint64(numMessages)
-			lsnAfterCommittedLSN, err := p.logClient.AppendAsync(abr.Payload, abr.EndOffsetsExclusively)
-			if err != nil {
-				p.logger.Error("Error appending batch to log", zap.Error(err), zap.String("partitionName", p.Name))
-				return
-			}
 			if lsnAfterCommittedLSN != 0 {
 				p.newCommittedLSN <- lsnAfterCommittedLSN
 			}
@@ -136,7 +136,7 @@ func (p *Partition) logInteractions() {
 			if err != nil {
 				p.logger.Error("Error polling committed LSN", zap.Error(err), zap.String("partitionName", p.Name))
 			}
-			if committedLSN+1 < lsnAfterLSNForNextAck {
+			if committedLSN+1 < lsnAfterMostRecentLSN {
 				go func() {
 					time.Sleep(MaxCheckLSNDelay)
 					p.AliveLock.RLock()

@@ -88,6 +88,7 @@ func (p *Partition) logInteractions() {
 	p.logger.Info("Start handling produce", zap.String("partitionName", p.Name))
 	appendLatencies := make([]time.Duration, 1000)
 	pollLatencies := make([]time.Duration, 1000)
+	var lsnAfterLastPolledCommittedLSN uint64
 	var lsnAfterMostRecentLSN uint64
 	checkScheduled := false
 	for {
@@ -146,8 +147,9 @@ func (p *Partition) logInteractions() {
 				}()
 				checkScheduled = true
 			}
-			if lsnAfterCommittedLSN != 0 {
+			if lsnAfterCommittedLSN != 0 && lsnAfterCommittedLSN != lsnAfterLastPolledCommittedLSN {
 				p.newCommittedLSN <- lsnAfterCommittedLSN
+				lsnAfterLastPolledCommittedLSN = lsnAfterCommittedLSN
 			}
 		} else if lir.pollCommittedRequest != nil {
 			checkScheduled = false
@@ -170,7 +172,10 @@ func (p *Partition) logInteractions() {
 				}()
 				checkScheduled = true
 			}
-			p.newCommittedLSN <- committedLSN + 1
+			if committedLSN+1 != lsnAfterLastPolledCommittedLSN {
+				p.newCommittedLSN <- committedLSN + 1
+				lsnAfterLastPolledCommittedLSN = committedLSN + 1
+			}
 		}
 	}
 }

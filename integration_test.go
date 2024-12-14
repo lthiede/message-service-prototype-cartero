@@ -53,7 +53,7 @@ func waitForAcks(expectedNumAck int, producer *client.Producer) error {
 	for int(producer.NumMessagesAck()) < expectedNumAck {
 		time.Sleep(time.Millisecond)
 		select {
-		case err := <-producer.Error:
+		case err := <-producer.AsyncError:
 			return err.Err
 		default:
 			continue

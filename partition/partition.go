@@ -44,10 +44,11 @@ type AppendBatchRequest struct {
 }
 
 type outstandingAck struct {
-	ack             *pb.ProduceAck
-	produceResponse chan *pb.Response
-	alive           *bool
-	aliveLock       *sync.RWMutex
+	ack                  *pb.ProduceAck
+	produceResponse      chan *pb.Response
+	alive                *bool
+	aliveLock            *sync.RWMutex
+	partitionReceiveTime time.Time
 }
 
 type ConsumeRequest struct {
@@ -122,9 +123,10 @@ func (p *Partition) logInteractions() {
 					StartLsn:      lsnAfterMostRecentLSN,
 					PartitionName: p.Name,
 				},
-				produceResponse: abr.ProduceResponse,
-				alive:           abr.Alive,
-				aliveLock:       abr.AliveLock,
+				produceResponse:      abr.ProduceResponse,
+				alive:                abr.Alive,
+				aliveLock:            abr.AliveLock,
+				partitionReceiveTime: time.Now(),
 			}
 			lsnAfterMostRecentLSN += uint64(numMessages)
 			start := time.Now()
@@ -191,16 +193,33 @@ func pct(latencies []time.Duration, pct float64) float64 {
 
 func (p *Partition) handleAcks() {
 	var longestOutstandingAck *outstandingAck
+	partitionLatenciesExludingSendAck := make([]time.Duration, 0)
+	partitionLatenciesIncludingSendAck := make([]time.Duration, 0)
 	for {
 		lsnAfterCommittedLSN, ok := <-p.newCommittedLSN
 		if !ok {
 			p.logger.Info("Stop handling acks", zap.String("partitionName", p.Name))
 			p.nextLSNCommitted.Store(math.MaxUint64)
+			slices.Sort(partitionLatenciesExludingSendAck)
+			slices.Sort(partitionLatenciesIncludingSendAck)
+			p.logger.Info("Latencies",
+				zap.Float64("partitionLatencyExludingSendAckP50", pct(partitionLatenciesExludingSendAck, 0.5)),
+				zap.Float64("partitionLatencyExludingSendAckP90", pct(partitionLatenciesExludingSendAck, 0.9)),
+				zap.Float64("partitionLatencyExludingSendAckP99", pct(partitionLatenciesExludingSendAck, 0.99)),
+				zap.Float64("partitionLatencyExludingSendAckP999", pct(partitionLatenciesExludingSendAck, 0.999)),
+				zap.Float64("partitionLatencyExludingSendAckP9999", pct(partitionLatenciesExludingSendAck, 0.9999)),
+				zap.Float64("partitionLatencyIncludingSendAckP50", pct(partitionLatenciesIncludingSendAck, 0.5)),
+				zap.Float64("partitionLatencyIncludingSendAckP90", pct(partitionLatenciesIncludingSendAck, 0.9)),
+				zap.Float64("partitionLatencyIncludingSendAckP99", pct(partitionLatenciesIncludingSendAck, 0.99)),
+				zap.Float64("partitionLatencyIncludingSendAckP999", pct(partitionLatenciesIncludingSendAck, 0.999)),
+				zap.Float64("partitionLatencyIncludingSendAckP9999", pct(partitionLatenciesIncludingSendAck, 0.9999)),
+			)
 			return
 		}
 		p.nextLSNCommitted.Store(lsnAfterCommittedLSN)
 		if longestOutstandingAck != nil {
 			if lsnAfterCommittedLSN >= longestOutstandingAck.ack.StartLsn+uint64(longestOutstandingAck.ack.NumMessages) {
+				partitionLatenciesExludingSendAck = append(partitionLatenciesExludingSendAck, time.Since(longestOutstandingAck.partitionReceiveTime))
 				longestOutstandingAck.aliveLock.RLock()
 				if *longestOutstandingAck.alive {
 					longestOutstandingAck.produceResponse <- &pb.Response{
@@ -208,6 +227,7 @@ func (p *Partition) handleAcks() {
 							ProduceAck: longestOutstandingAck.ack,
 						},
 					}
+					partitionLatenciesIncludingSendAck = append(partitionLatenciesExludingSendAck, time.Since(longestOutstandingAck.partitionReceiveTime))
 				}
 				longestOutstandingAck.aliveLock.RUnlock()
 			} else {
@@ -219,6 +239,7 @@ func (p *Partition) handleAcks() {
 			select {
 			case longestOutstandingAck = <-p.outstandingAcks:
 				if lsnAfterCommittedLSN >= longestOutstandingAck.ack.StartLsn+uint64(longestOutstandingAck.ack.NumMessages) {
+					partitionLatenciesExludingSendAck = append(partitionLatenciesExludingSendAck, time.Since(longestOutstandingAck.partitionReceiveTime))
 					longestOutstandingAck.aliveLock.RLock()
 					if *longestOutstandingAck.alive {
 						longestOutstandingAck.produceResponse <- &pb.Response{
@@ -226,6 +247,7 @@ func (p *Partition) handleAcks() {
 								ProduceAck: longestOutstandingAck.ack,
 							},
 						}
+						partitionLatenciesIncludingSendAck = append(partitionLatenciesExludingSendAck, time.Since(longestOutstandingAck.partitionReceiveTime))
 					}
 					longestOutstandingAck.aliveLock.RUnlock()
 				} else {

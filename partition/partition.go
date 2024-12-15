@@ -176,24 +176,23 @@ func (p *Partition) logInteractions() {
 			pollLatencies = append(pollLatencies, time.Since(startPoll))
 			if err != nil {
 				p.logger.Error("Error polling committed LSN", zap.Error(err), zap.String("partitionName", p.Name))
-			} else {
-				if committedLSN+1 < lsnAfterMostRecentLSN {
-					go func() {
-						time.Sleep(MaxCheckLSNDelay)
-						p.AliveLock.RLock()
-						defer p.AliveLock.RUnlock()
-						if p.Alive {
-							p.LogInteractionRequests <- LogInteractionRequest{
-								pollCommittedRequest: &struct{}{},
-							}
+			}
+			if err != nil || committedLSN+1 < lsnAfterMostRecentLSN {
+				go func() {
+					time.Sleep(MaxCheckLSNDelay)
+					p.AliveLock.RLock()
+					defer p.AliveLock.RUnlock()
+					if p.Alive {
+						p.LogInteractionRequests <- LogInteractionRequest{
+							pollCommittedRequest: &struct{}{},
 						}
-					}()
-					checkScheduled = true
-				}
-				if committedLSN+1 != lsnAfterLastPolledCommittedLSN {
-					p.newCommittedLSN <- committedLSN + 1
-					lsnAfterLastPolledCommittedLSN = committedLSN + 1
-				}
+					}
+				}()
+				checkScheduled = true
+			}
+			if err == nil && committedLSN+1 != lsnAfterLastPolledCommittedLSN {
+				p.newCommittedLSN <- committedLSN + 1
+				lsnAfterLastPolledCommittedLSN = committedLSN + 1
 			}
 			loopLatenciesPoll = append(loopLatenciesPoll, time.Since(startLoop))
 		}

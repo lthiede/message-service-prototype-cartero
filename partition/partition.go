@@ -96,7 +96,6 @@ func (p *Partition) logInteractions() {
 	var lsnAfterMostRecentLSN uint64
 	checkScheduled := false
 	for {
-		startLoop := time.Now()
 		lir, ok := <-p.LogInteractionRequests
 		if !ok {
 			p.logger.Info("Stop handling produce", zap.String("partitionName", p.Name))
@@ -135,6 +134,7 @@ func (p *Partition) logInteractions() {
 				zap.Float64("goRoutineLatencyP9999", pct(goRoutineLatencies, 0.9999)))
 			return
 		}
+		startLoop := time.Now()
 		if abr := lir.AppendBatchRequest; abr != nil {
 			numMessages := uint32(len(abr.EndOffsetsExclusively))
 			p.outstandingAcks <- &outstandingAck{

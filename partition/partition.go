@@ -117,15 +117,15 @@ func (p *Partition) logInteractions() {
 				zap.Float64("pollLatencyP999", pct(pollLatencies, 0.999)),
 				zap.Float64("pollLatencyP9999", pct(pollLatencies, 0.9999)),
 				zap.Float64("loopLatencyPollP50", pct(loopLatenciesPoll, 0.5)),
-				zap.Float64("loopLatencyPollP50", pct(loopLatenciesPoll, 0.9)),
-				zap.Float64("loopLatencyPollP50", pct(loopLatenciesPoll, 0.99)),
-				zap.Float64("loopLatencyPollP50", pct(loopLatenciesPoll, 0.999)),
-				zap.Float64("loopLatencyPollP50", pct(loopLatenciesPoll, 0.9999)),
+				zap.Float64("loopLatencyPollP90", pct(loopLatenciesPoll, 0.9)),
+				zap.Float64("loopLatencyPollP99", pct(loopLatenciesPoll, 0.99)),
+				zap.Float64("loopLatencyPollP999", pct(loopLatenciesPoll, 0.999)),
+				zap.Float64("loopLatencyPollP9999", pct(loopLatenciesPoll, 0.9999)),
 				zap.Float64("loopLatencyAppendP50", pct(loopLatenciesAppend, 0.5)),
-				zap.Float64("loopLatencyAppendP50", pct(loopLatenciesAppend, 0.9)),
-				zap.Float64("loopLatencyAppendP50", pct(loopLatenciesAppend, 0.99)),
-				zap.Float64("loopLatencyAppendP50", pct(loopLatenciesAppend, 0.999)),
-				zap.Float64("loopLatencyAppendP50", pct(loopLatenciesAppend, 0.9999)),
+				zap.Float64("loopLatencyAppendP90", pct(loopLatenciesAppend, 0.9)),
+				zap.Float64("loopLatencyAppendP99", pct(loopLatenciesAppend, 0.99)),
+				zap.Float64("loopLatencyAppendP999", pct(loopLatenciesAppend, 0.999)),
+				zap.Float64("loopLatencyAppendP9999", pct(loopLatenciesAppend, 0.9999)),
 			)
 			return
 		}
@@ -179,7 +179,7 @@ func (p *Partition) logInteractions() {
 			}
 			if err != nil || committedLSN+1 < lsnAfterMostRecentLSN {
 				go func() {
-					time.Sleep(MaxCheckLSNDelay)
+					// time.Sleep(MaxCheckLSNDelay)
 					p.AliveLock.RLock()
 					defer p.AliveLock.RUnlock()
 					if p.Alive {

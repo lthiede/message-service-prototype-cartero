@@ -87,10 +87,11 @@ var MaxCheckLSNDelay = 200 * time.Microsecond
 // Receiving on the channel is not a bottleneck
 func (p *Partition) logInteractions() {
 	p.logger.Info("Start handling produce", zap.String("partitionName", p.Name))
-	loopLatenciesAppend := make([]time.Duration, 1000)
-	loopLatenciesPoll := make([]time.Duration, 1000)
-	appendLatencies := make([]time.Duration, 1000)
-	pollLatencies := make([]time.Duration, 1000)
+	loopLatenciesAppend := make([]time.Duration, 0)
+	loopLatenciesPoll := make([]time.Duration, 0)
+	appendLatencies := make([]time.Duration, 0)
+	pollLatencies := make([]time.Duration, 0)
+	goRoutineLatencies := make([]time.Duration, 0)
 	var lsnAfterLastPolledCommittedLSN uint64
 	var lsnAfterMostRecentLSN uint64
 	checkScheduled := false
@@ -105,6 +106,7 @@ func (p *Partition) logInteractions() {
 			slices.Sort(pollLatencies)
 			slices.Sort(loopLatenciesAppend)
 			slices.Sort(loopLatenciesPoll)
+			slices.Sort(goRoutineLatencies)
 			p.logger.Info("Latencies",
 				zap.Float64("appendLatencyP50", pct(appendLatencies, 0.5)),
 				zap.Float64("appendLatencyP90", pct(appendLatencies, 0.9)),
@@ -126,7 +128,11 @@ func (p *Partition) logInteractions() {
 				zap.Float64("loopLatencyAppendP99", pct(loopLatenciesAppend, 0.99)),
 				zap.Float64("loopLatencyAppendP999", pct(loopLatenciesAppend, 0.999)),
 				zap.Float64("loopLatencyAppendP9999", pct(loopLatenciesAppend, 0.9999)),
-			)
+				zap.Float64("goRoutineLatencyP50", pct(goRoutineLatencies, 0.5)),
+				zap.Float64("goRoutineLatencyP90", pct(goRoutineLatencies, 0.9)),
+				zap.Float64("goRoutineLatencyP99", pct(goRoutineLatencies, 0.99)),
+				zap.Float64("goRoutineLatencyP999", pct(goRoutineLatencies, 0.999)),
+				zap.Float64("goRoutineLatencyP9999", pct(goRoutineLatencies, 0.9999)))
 			return
 		}
 		if abr := lir.AppendBatchRequest; abr != nil {
@@ -178,8 +184,9 @@ func (p *Partition) logInteractions() {
 				p.logger.Error("Error polling committed LSN", zap.Error(err), zap.String("partitionName", p.Name))
 			}
 			if err != nil || committedLSN+1 < lsnAfterMostRecentLSN {
+				startSchedulingGoRoutine := time.Now()
 				go func() {
-					// time.Sleep(MaxCheckLSNDelay)
+					time.Sleep(MaxCheckLSNDelay)
 					p.AliveLock.RLock()
 					defer p.AliveLock.RUnlock()
 					if p.Alive {
@@ -188,6 +195,7 @@ func (p *Partition) logInteractions() {
 						}
 					}
 				}()
+				goRoutineLatencies = append(goRoutineLatencies, time.Since(startSchedulingGoRoutine))
 				checkScheduled = true
 			}
 			if err == nil && committedLSN+1 != lsnAfterLastPolledCommittedLSN {

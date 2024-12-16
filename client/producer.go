@@ -163,7 +163,7 @@ func (p *Producer) sendBatch() error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal batch: %v", err)
 	}
-	for uint64(len(p.messages))+p.numMessagesSend > p.numMessagesAck.Load()+uint64(p.MaxOutstanding) {
+	for p.numMessagesSend >= p.numMessagesAck.Load()+uint64(p.MaxOutstanding) {
 		time.Sleep(100 * time.Microsecond)
 	}
 	p.client.connWriteMutex.Lock()

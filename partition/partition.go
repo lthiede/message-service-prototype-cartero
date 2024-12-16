@@ -225,6 +225,7 @@ func (p *Partition) NextLSN() uint64 {
 func (p *Partition) Close() error {
 	p.AliveLock.Lock()
 	defer p.AliveLock.Unlock()
+	p.logger.Info("Acquired exlusive partition log", zap.String("partitionName", p.Name))
 	p.Alive = false
 	p.logger.Info("Closing partition", zap.String("partitionName", p.Name))
 	close(p.LogInteractionRequests)

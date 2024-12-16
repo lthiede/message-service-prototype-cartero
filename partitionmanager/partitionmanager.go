@@ -111,6 +111,7 @@ func (pm *PartitionManager) DeletePartition(partitionName string, numPartitions 
 func (pm *PartitionManager) deletePartition(name string) error {
 	pm.rwMutex.Lock()
 	defer pm.rwMutex.Unlock()
+	pm.logger.Info("Acquired exclusive partition manager lock")
 	p, ok := pm.partitions[name]
 	if !ok {
 		pm.logger.Warn("Tried to delete partition that (already) doesn't exist", zap.String("partitionName", name))

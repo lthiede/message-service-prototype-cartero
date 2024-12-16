@@ -20,6 +20,7 @@ import (
 
 const measurementPeriod = 10 * time.Second
 const basePartitionName = "partition"
+const maxOutstandingAsync uint32 = 524288
 
 type stringSlice []string
 type intSlice []int
@@ -181,7 +182,13 @@ func oneRun(partitions int, messageSize int, maxBatchSize int) (*Result, error) 
 	}
 	for i := range numClients {
 		partitionName := partitionNames[i]
-		go oneClient(partitionName, messageSize, maxBatchSize, returnChans[i])
+		var maxOutstanding uint32
+		if *cFlag {
+			maxBatchSize = 1
+		} else {
+			maxOutstanding = maxOutstandingAsync / uint32(partitions)
+		}
+		go oneClient(partitionName, messageSize, maxBatchSize, maxOutstanding, returnChans[i])
 	}
 	numMeasurements := int(experimentDuration.Seconds() / measurementPeriod.Seconds())
 	aggregatedMessagesPerSecond := make([]uint64, numMeasurements)
@@ -238,7 +245,7 @@ type clientResult struct {
 	LatencyMeasurements           []time.Duration
 }
 
-func oneClient(partitionName string, messageSize int, maxBatchSize int, messagesSent chan<- clientResult) {
+func oneClient(partitionName string, messageSize int, maxBatchSize int, maxOutstanding uint32, messagesSent chan<- clientResult) {
 	payload := make([]byte, messageSize)
 	rand.Read(payload)
 	config := zap.NewDevelopmentConfig()
@@ -266,12 +273,8 @@ func oneClient(partitionName string, messageSize int, maxBatchSize int, messages
 	defer producer.Close()
 	producer.MaxBatchSize = uint32(maxBatchSize)
 	producer.MaxPublishDelay = 0 // turns off publishing on a timer
-	if *cFlag {
-		producer.MaxOutstanding = 1
-	} else {
-		producer.MaxOutstanding = 1024
-	}
-	logger.Info("Starting warmup", zap.Int("duration", int(experimentDuration.Seconds())))
+	producer.MaxOutstanding = maxOutstanding
+	logger.Info("Starting warmup", zap.Float64("duration", experimentDuration.Seconds()), zap.Uint32("maxOutstanding", maxOutstanding))
 	warmupFinished := timer(experimentDuration)
 warmup:
 	for {
@@ -279,7 +282,6 @@ warmup:
 		case <-warmupFinished:
 			break warmup
 		default:
-			logger.Info("Calling add message")
 			err := producer.AddMessage(payload)
 			if err != nil {
 				logger.Error("Error adding message", zap.Error(err))

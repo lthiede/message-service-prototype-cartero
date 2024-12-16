@@ -199,7 +199,7 @@ func oneRun(partitions int, messageSize int, maxBatchSize int) (*Result, error) 
 		if !ok {
 			return nil, errors.New("one client wasn't successful")
 		}
-		fmt.Println("Received client result")
+		logger.Info("Received client result")
 		if len(clientResult.MessagesPerSecondMeasurements) != numMeasurements {
 			return nil, fmt.Errorf("client returned %d measurements but expected %d", len(clientResult.MessagesPerSecondMeasurements), numMeasurements)
 		}
@@ -213,6 +213,7 @@ func oneRun(partitions int, messageSize int, maxBatchSize int) (*Result, error) 
 	if err != nil {
 		return nil, fmt.Errorf("error deleting partitions: %v", err)
 	}
+	logger.Info("Successfully deleted partition", zap.String("partitionName", basePartitionName))
 	slices.Sort(latencies)
 	return &Result{
 		MessagesPerSecondMeasurements: aggregatedMessagesPerSecond,

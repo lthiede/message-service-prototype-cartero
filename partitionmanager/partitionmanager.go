@@ -99,6 +99,7 @@ func (pm *PartitionManager) DeletePartition(partitionName string, numPartitions 
 	pm.logger.Info("Received partition delete request", zap.String("partitionName", partitionName))
 	for i := range numPartitions {
 		name := fmt.Sprintf("%s%d", partitionName, i)
+		pm.logger.Info("Trying to delete partition", zap.String("partitionName", name))
 		err := pm.deletePartition(name)
 		if err != nil {
 			return fmt.Errorf("error deleting partitions: %v", err)

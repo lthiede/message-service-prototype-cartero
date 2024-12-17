@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	pb "github.com/lthiede/cartero/proto"
 
@@ -230,29 +231,21 @@ func (p *Partition) NextLSN() uint64 {
 
 func (p *Partition) Close() error {
 	s := reflect.ValueOf(&p.AliveLock).Elem()
-	p.logger.Info("reflected alivelock", zap.String("typeName", s.Type().Name()))
 	pendingField := s.FieldByName("readerCount")
-	if !pendingField.IsValid() {
-		p.logger.Error("pendingField not valid")
-	}
 	waitingField := s.FieldByName("readerWait")
-	if !waitingField.IsValid() {
-		p.logger.Error("waitingField not valid")
+
+	pendingValue := reflect.NewAt(pendingField.Type(), unsafe.Pointer(pendingField.UnsafeAddr())).Elem()
+	waitingValue := reflect.NewAt(waitingField.Type(), unsafe.Pointer(waitingField.UnsafeAddr())).Elem()
+	if !pendingValue.IsValid() {
+		p.logger.Error("pendingValue not valid")
 	}
-	waitingFieldType := waitingField.Type()
-	p.logger.Info("reflected atomic fields",
-		zap.String("typeNameWaiting", waitingFieldType.Name()))
-	for i := range waitingFieldType.NumMethod() {
-		p.logger.Info("have method", zap.String("name", waitingFieldType.Method(i).Name))
-	}
-	loadPending := pendingField.MethodByName("Load")
+
+	loadPending := pendingValue.MethodByName("Load")
 	if !loadPending.IsValid() {
 		p.logger.Error("loadPending not valid")
 	}
-	loadWaiting := waitingField.MethodByName("Load")
-	if !loadWaiting.IsValid() {
-		p.logger.Error("loadWaiting not valid")
-	}
+	loadWaiting := waitingValue.MethodByName("Load")
+
 	pending := loadPending.Call([]reflect.Value{})[0]
 	waiting := loadWaiting.Call([]reflect.Value{})[0]
 	p.logger.Info("Trying to acquire partition lock", zap.Int64("pending", pending.Int()), zap.Int64("waiting", waiting.Int()))

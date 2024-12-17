@@ -236,15 +236,20 @@ func (c *Connection) SendResponse(res *pb.Response) error {
 }
 
 func (c *Connection) handleResponses() {
+	var partition string
 	for {
 		select {
 		case <-c.quit:
-			c.logger.Info("Stop handling responses", zap.String("name", c.name))
+			c.logger.Info("Stop handling responses", zap.String("name", c.name), zap.String("partitionName", partition))
 			return
 		case response := <-c.responses:
+			ack := response.GetProduceAck()
+			if ack != nil {
+				partition = ack.PartitionName
+			}
 			err := c.SendResponse(response)
 			if err != nil {
-				c.logger.Error("Failed to asynchronously send response", zap.Error(err))
+				c.logger.Error("Failed to asynchronously send response", zap.Error(err), zap.String("partitionName", partition))
 				c.Close()
 				continue
 			}
@@ -259,8 +264,10 @@ func (c *Connection) Close() error {
 		c.aliveLock.Unlock()
 		return nil
 	}
-	c.logger.Info("Closing connection", zap.String("name", c.name))
 	c.alive = false
+	c.logger.Info("Closing connection",
+		zap.String("name", c.name),
+		zap.String("alive", fmt.Sprintf("%t %p", c.alive, &c.alive)))
 	c.aliveLock.Unlock()
 	close(c.quit)
 	for _, pc := range c.partitionConsumers {

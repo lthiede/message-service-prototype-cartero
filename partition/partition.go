@@ -194,7 +194,8 @@ func (p *Partition) handleAcks() {
 			if lsnAfterCommittedLSN >= longestOutstandingAck.ack.StartLsn+uint64(longestOutstandingAck.ack.NumMessages) {
 				p.logger.Info("locking response", zap.String("partitionName", p.Name))
 				longestOutstandingAck.aliveLock.RLock()
-				p.logger.Info("locked response", zap.String("partitionName", p.Name))
+				p.logger.Info("locked response", zap.String("partitionName", p.Name),
+					zap.String("alive", fmt.Sprintf("%t %p", *longestOutstandingAck.alive, longestOutstandingAck.alive)))
 				if *longestOutstandingAck.alive {
 					p.logger.Info("sending response", zap.String("partitionName", p.Name))
 					longestOutstandingAck.produceResponse <- &pb.Response{
@@ -223,7 +224,8 @@ func (p *Partition) handleAcks() {
 				if lsnAfterCommittedLSN >= longestOutstandingAck.ack.StartLsn+uint64(longestOutstandingAck.ack.NumMessages) {
 					p.logger.Info("locking response", zap.String("partitionName", p.Name))
 					longestOutstandingAck.aliveLock.RLock()
-					p.logger.Info("locked response", zap.String("partitionName", p.Name))
+					p.logger.Info("locked response", zap.String("partitionName", p.Name),
+						zap.String("alive", fmt.Sprintf("%t %p", *longestOutstandingAck.alive, longestOutstandingAck.alive)))
 					if *longestOutstandingAck.alive {
 						p.logger.Info("sending response", zap.String("partitionName", p.Name))
 						longestOutstandingAck.produceResponse <- &pb.Response{

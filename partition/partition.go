@@ -230,8 +230,22 @@ func (p *Partition) NextLSN() uint64 {
 
 func (p *Partition) Close() error {
 	s := reflect.ValueOf(&p.AliveLock).Elem()
-	loadPending := s.FieldByName("readerCount").MethodByName("Load")
-	loadWaiting := s.FieldByName("readerWait").MethodByName("Load")
+	pendingField := s.FieldByName("readerCount")
+	if !pendingField.IsValid() {
+		p.logger.Error("pendingField not valid")
+	}
+	waitingField := s.FieldByName("readerWait")
+	if !waitingField.IsValid() {
+		p.logger.Error("waitingField not valid")
+	}
+	loadPending := pendingField.MethodByName("Load")
+	if !loadPending.IsValid() {
+		p.logger.Error("loadPending not valid")
+	}
+	loadWaiting := waitingField.MethodByName("Load")
+	if !loadWaiting.IsValid() {
+		p.logger.Error("loadWaiting not valid")
+	}
 	pending := loadPending.Call([]reflect.Value{})[0]
 	waiting := loadWaiting.Call([]reflect.Value{})[0]
 	p.logger.Info("Trying to acquire partition lock", zap.Int64("pending", pending.Int()), zap.Int64("waiting", waiting.Int()))

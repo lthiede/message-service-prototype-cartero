@@ -249,7 +249,9 @@ func (c *Connection) handleResponses() {
 			}
 			err := c.SendResponse(response)
 			if err != nil {
-				c.logger.Error("Failed to asynchronously send response", zap.Error(err), zap.String("partitionName", partition))
+				c.logger.Error("Failed to asynchronously send response", zap.Error(err),
+					zap.String("partitionName", partition),
+					zap.String("name", c.name))
 				c.Close()
 				continue
 			}
@@ -259,6 +261,7 @@ func (c *Connection) handleResponses() {
 }
 
 func (c *Connection) Close() error {
+	c.logger.Info("Trying to acquire lock to close connection", zap.String("name", c.name))
 	c.aliveLock.Lock()
 	if !c.alive {
 		c.aliveLock.Unlock()

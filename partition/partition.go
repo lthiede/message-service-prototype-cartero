@@ -230,6 +230,7 @@ func (p *Partition) NextLSN() uint64 {
 
 func (p *Partition) Close() error {
 	s := reflect.ValueOf(&p.AliveLock).Elem()
+	p.logger.Info("reflected alivelock", zap.String("typeName", s.Type().Name()))
 	pendingField := s.FieldByName("readerCount")
 	if !pendingField.IsValid() {
 		p.logger.Error("pendingField not valid")

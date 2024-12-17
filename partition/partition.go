@@ -3,6 +3,7 @@ package partition
 import (
 	"fmt"
 	"math"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -196,7 +197,12 @@ func (p *Partition) handleAcks() {
 	moreAcks:
 		for {
 			select {
-			case longestOutstandingAck = <-p.outstandingAcks:
+			case longestOutstandingAck, ok = <-p.outstandingAcks:
+				if !ok {
+					p.logger.Info("Stop handling acks", zap.String("partitionName", p.Name))
+					p.nextLSNCommitted.Store(math.MaxUint64)
+					return
+				}
 				if lsnAfterCommittedLSN >= longestOutstandingAck.ack.StartLsn+uint64(longestOutstandingAck.ack.NumMessages) {
 					longestOutstandingAck.aliveLock.RLock()
 					if *longestOutstandingAck.alive {
@@ -223,9 +229,15 @@ func (p *Partition) NextLSN() uint64 {
 }
 
 func (p *Partition) Close() error {
+	s := reflect.ValueOf(&p.AliveLock).Elem()
+	loadPending := s.FieldByName("readerCount").MethodByName("Load")
+	loadWaiting := s.FieldByName("readerWait").MethodByName("Load")
+	pending := loadPending.Call([]reflect.Value{})[0]
+	waiting := loadWaiting.Call([]reflect.Value{})[0]
+	p.logger.Info("Trying to acquire partition lock", zap.Int64("pending", pending.Int()), zap.Int64("waiting", waiting.Int()))
 	p.AliveLock.Lock()
 	defer p.AliveLock.Unlock()
-	p.logger.Info("Acquired exlusive partition log", zap.String("partitionName", p.Name))
+	p.logger.Info("Acquired exclusive partition lock", zap.String("partitionName", p.Name))
 	p.Alive = false
 	p.logger.Info("Closing partition", zap.String("partitionName", p.Name))
 	close(p.LogInteractionRequests)

@@ -209,7 +209,6 @@ func (p *Partition) handleAcks() {
 
 func (p *Partition) sendAck(ack *outstandingAck) {
 	defer func() {
-		p.logger.Info("Sent ack")
 		if err := recover(); err != nil {
 			p.logger.Error("Caught error", zap.Any("err", err))
 		}

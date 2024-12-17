@@ -239,6 +239,9 @@ func (p *Partition) Close() error {
 	if !waitingField.IsValid() {
 		p.logger.Error("waitingField not valid")
 	}
+	p.logger.Info("reflected atomic fields",
+		zap.String("typeNamePending", pendingField.Type().Name()),
+		zap.String("typeNameWaiting", waitingField.Type().Name()))
 	loadPending := pendingField.MethodByName("Load")
 	if !loadPending.IsValid() {
 		p.logger.Error("loadPending not valid")

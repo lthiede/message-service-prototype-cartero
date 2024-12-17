@@ -182,13 +182,7 @@ func oneRun(partitions int, messageSize int, maxBatchSize int) (*Result, error) 
 	}
 	for i := range numClients {
 		partitionName := partitionNames[i]
-		var maxOutstanding uint32
-		if *cFlag {
-			maxBatchSize = 1
-		} else {
-			maxOutstanding = maxOutstandingAsync / uint32(partitions)
-		}
-		go oneClient(partitionName, messageSize, maxBatchSize, maxOutstanding, returnChans[i])
+		go oneClient(partitionName, messageSize, maxBatchSize, returnChans[i])
 	}
 	numMeasurements := int(experimentDuration.Seconds() / measurementPeriod.Seconds())
 	aggregatedMessagesPerSecond := make([]uint64, numMeasurements)
@@ -246,7 +240,7 @@ type clientResult struct {
 	LatencyMeasurements           []time.Duration
 }
 
-func oneClient(partitionName string, messageSize int, maxBatchSize int, maxOutstanding uint32, messagesSent chan<- clientResult) {
+func oneClient(partitionName string, messageSize int, maxBatchSize int, messagesSent chan<- clientResult) {
 	payload := make([]byte, messageSize)
 	rand.Read(payload)
 	config := zap.NewDevelopmentConfig()
@@ -274,8 +268,12 @@ func oneClient(partitionName string, messageSize int, maxBatchSize int, maxOutst
 	defer producer.Close()
 	producer.MaxBatchSize = uint32(maxBatchSize)
 	producer.MaxPublishDelay = 0 // turns off publishing on a timer
-	producer.MaxOutstanding = maxOutstanding
-	logger.Info("Starting warmup", zap.Float64("duration", experimentDuration.Seconds()), zap.Uint32("maxOutstanding", maxOutstanding))
+	if *cFlag {
+		producer.MaxOutstanding = 1
+	} else {
+		producer.MaxOutstanding = maxOutstandingAsync
+	}
+	logger.Info("Starting warmup", zap.Float64("duration", experimentDuration.Seconds()), zap.Uint32("maxOutstanding", producer.MaxOutstanding))
 	warmupFinished := timer(experimentDuration)
 warmup:
 	for {

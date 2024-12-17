@@ -3,11 +3,9 @@ package partition
 import (
 	"fmt"
 	"math"
-	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
-	"unsafe"
 
 	pb "github.com/lthiede/cartero/proto"
 
@@ -19,15 +17,16 @@ import (
 const MaxMessageSize = 3800
 
 type Partition struct {
-	Name                   string
-	Alive                  bool
-	AliveLock              sync.RWMutex
-	LogInteractionRequests chan LogInteractionRequest
-	outstandingAcks        chan *outstandingAck
-	newCommittedLSN        chan uint64
-	logClient              *logclient.ClientWrapper
-	logger                 *zap.Logger
-	nextLSNCommitted       atomic.Uint64 // initialized to default value 0
+	Name                    string
+	Alive                   bool
+	AliveLock               sync.RWMutex
+	LogInteractionRequests  chan LogInteractionRequest
+	outstandingAcks         chan *outstandingAck
+	newCommittedLSN         chan uint64
+	logClient               *logclient.ClientWrapper
+	logger                  *zap.Logger
+	nextLSNCommitted        atomic.Uint64 // initialized to default value 0
+	pollCommittedGoRoutines atomic.Uint64
 }
 
 type LogInteractionRequest struct {
@@ -118,6 +117,7 @@ func (p *Partition) logInteractions() {
 				return
 			}
 			if lsnAfterCommittedLSN != lsnAfterMostRecentLSN && !checkScheduled {
+				p.pollCommittedGoRoutines.Add(1)
 				go func() {
 					// time.Sleep(MaxCheckLSNDelay)
 					p.AliveLock.RLock()
@@ -135,12 +135,14 @@ func (p *Partition) logInteractions() {
 				lsnAfterLastPolledCommittedLSN = lsnAfterCommittedLSN
 			}
 		} else if lir.pollCommittedRequest != nil {
+			p.pollCommittedGoRoutines.Store(p.pollCommittedGoRoutines.Load() - 1)
 			checkScheduled = false
 			committedLSN, err := p.logClient.PollCompletion()
 			if err != nil {
 				p.logger.Error("Error polling committed LSN", zap.Error(err), zap.String("partitionName", p.Name))
 			}
 			if err != nil || committedLSN+1 < lsnAfterMostRecentLSN {
+				p.pollCommittedGoRoutines.Add(1)
 				go func() {
 					// time.Sleep(MaxCheckLSNDelay)
 					p.AliveLock.RLock()
@@ -230,28 +232,18 @@ func (p *Partition) NextLSN() uint64 {
 }
 
 func (p *Partition) Close() error {
-	s := reflect.ValueOf(&p.AliveLock).Elem()
-	pendingField := s.FieldByName("readerCount")
-	waitingField := s.FieldByName("readerWait")
-
-	pendingValue := reflect.NewAt(pendingField.Type(), unsafe.Pointer(pendingField.UnsafeAddr())).Elem()
-	waitingValue := reflect.NewAt(waitingField.Type(), unsafe.Pointer(waitingField.UnsafeAddr())).Elem()
-	if !pendingValue.IsValid() {
-		p.logger.Error("pendingValue not valid")
+	for {
+		p.logger.Info("Trying to acquire partition lock",
+			zap.String("partitionName", p.Name),
+			zap.Uint64("competingPollGoRoutines", p.pollCommittedGoRoutines.Load()))
+		ok := p.AliveLock.TryLock()
+		if ok {
+			break
+		} else {
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
-
-	loadPending := pendingValue.MethodByName("Load")
-	if !loadPending.IsValid() {
-		p.logger.Error("loadPending not valid")
-	}
-	loadWaiting := waitingValue.MethodByName("Load")
-
-	pending := loadPending.Call([]reflect.Value{})[0]
-	waiting := loadWaiting.Call([]reflect.Value{})[0]
-	p.logger.Info("Trying to acquire partition lock", zap.Int64("pending", pending.Int()), zap.Int64("waiting", waiting.Int()))
-	p.AliveLock.Lock()
 	defer p.AliveLock.Unlock()
-	p.logger.Info("Acquired exclusive partition lock", zap.String("partitionName", p.Name))
 	p.Alive = false
 	p.logger.Info("Closing partition", zap.String("partitionName", p.Name))
 	close(p.LogInteractionRequests)

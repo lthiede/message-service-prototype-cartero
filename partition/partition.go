@@ -46,8 +46,6 @@ type AppendBatchRequest struct {
 type outstandingAck struct {
 	ack             *pb.ProduceAck
 	produceResponse chan *pb.Response
-	alive           *bool
-	aliveLock       *sync.RWMutex
 }
 
 type ConsumeRequest struct {
@@ -99,7 +97,6 @@ func (p *Partition) logInteractions() {
 		}
 		if abr := lir.AppendBatchRequest; abr != nil {
 			numMessages := uint32(len(abr.EndOffsetsExclusively))
-			p.logger.Info("Trying to add outstanding", zap.String("partitionName", p.Name))
 			p.outstandingAcks <- &outstandingAck{
 				ack: &pb.ProduceAck{
 					BatchId:       abr.BatchId,
@@ -108,10 +105,7 @@ func (p *Partition) logInteractions() {
 					PartitionName: p.Name,
 				},
 				produceResponse: abr.ProduceResponse,
-				alive:           abr.Alive,
-				aliveLock:       abr.AliveLock,
 			}
-			p.logger.Info("Added outstanding", zap.String("partitionName", p.Name))
 			lsnAfterMostRecentLSN += uint64(numMessages)
 			lsnAfterCommittedLSN, err := p.logClient.AppendAsync(abr.Payload, abr.EndOffsetsExclusively)
 			if err != nil {
@@ -133,9 +127,7 @@ func (p *Partition) logInteractions() {
 				checkScheduled = true
 			}
 			if lsnAfterCommittedLSN != 0 && lsnAfterCommittedLSN != lsnAfterLastPolledCommittedLSN {
-				p.logger.Info("Sending lsn", zap.String("partitionName", p.Name))
 				p.newCommittedLSN <- lsnAfterCommittedLSN
-				p.logger.Info("Sent lsn", zap.String("partitionName", p.Name))
 				lsnAfterLastPolledCommittedLSN = lsnAfterCommittedLSN
 			}
 		} else if lir.pollCommittedRequest != nil {
@@ -160,9 +152,7 @@ func (p *Partition) logInteractions() {
 				checkScheduled = true
 			}
 			if err == nil && committedLSN+1 != lsnAfterLastPolledCommittedLSN {
-				p.logger.Info("Sending lsn", zap.String("partitionName", p.Name))
 				p.newCommittedLSN <- committedLSN + 1
-				p.logger.Info("Sent lsn", zap.String("partitionName", p.Name))
 				lsnAfterLastPolledCommittedLSN = committedLSN + 1
 			}
 		}
@@ -181,9 +171,7 @@ func pct(latencies []time.Duration, pct float64) float64 {
 func (p *Partition) handleAcks() {
 	var longestOutstandingAck *outstandingAck
 	for {
-		p.logger.Info("receiving lsn", zap.String("partitionName", p.Name))
 		lsnAfterCommittedLSN, ok := <-p.newCommittedLSN
-		p.logger.Info("got lsn", zap.String("partitionName", p.Name))
 		if !ok {
 			p.logger.Info("Stop handling acks", zap.String("partitionName", p.Name))
 			p.nextLSNCommitted.Store(math.MaxUint64)
@@ -192,50 +180,22 @@ func (p *Partition) handleAcks() {
 		p.nextLSNCommitted.Store(lsnAfterCommittedLSN)
 		if longestOutstandingAck != nil {
 			if lsnAfterCommittedLSN >= longestOutstandingAck.ack.StartLsn+uint64(longestOutstandingAck.ack.NumMessages) {
-				p.logger.Info("locking response", zap.String("partitionName", p.Name))
-				longestOutstandingAck.aliveLock.RLock()
-				p.logger.Info("locked response", zap.String("partitionName", p.Name),
-					zap.String("alive", fmt.Sprintf("%t %p", *longestOutstandingAck.alive, longestOutstandingAck.alive)))
-				if *longestOutstandingAck.alive {
-					p.logger.Info("sending response", zap.String("partitionName", p.Name))
-					longestOutstandingAck.produceResponse <- &pb.Response{
-						Response: &pb.Response_ProduceAck{
-							ProduceAck: longestOutstandingAck.ack,
-						},
-					}
-					p.logger.Info("sent response", zap.String("partitionName", p.Name))
-				}
-				longestOutstandingAck.aliveLock.RUnlock()
+				sendAck(longestOutstandingAck)
 			} else {
 				continue
 			}
 		}
 	moreAcks:
 		for {
-			p.logger.Info("maybe outstanding", zap.String("partitionName", p.Name))
 			select {
 			case longestOutstandingAck, ok = <-p.outstandingAcks:
-				p.logger.Info("got outstanding", zap.String("partitionName", p.Name))
 				if !ok {
 					p.logger.Info("Stop handling acks", zap.String("partitionName", p.Name))
 					p.nextLSNCommitted.Store(math.MaxUint64)
 					return
 				}
 				if lsnAfterCommittedLSN >= longestOutstandingAck.ack.StartLsn+uint64(longestOutstandingAck.ack.NumMessages) {
-					p.logger.Info("locking response", zap.String("partitionName", p.Name))
-					longestOutstandingAck.aliveLock.RLock()
-					p.logger.Info("locked response", zap.String("partitionName", p.Name),
-						zap.String("alive", fmt.Sprintf("%t %p", *longestOutstandingAck.alive, longestOutstandingAck.alive)))
-					if *longestOutstandingAck.alive {
-						p.logger.Info("sending response", zap.String("partitionName", p.Name))
-						longestOutstandingAck.produceResponse <- &pb.Response{
-							Response: &pb.Response_ProduceAck{
-								ProduceAck: longestOutstandingAck.ack,
-							},
-						}
-						p.logger.Info("sent response", zap.String("partitionName", p.Name))
-					}
-					longestOutstandingAck.aliveLock.RUnlock()
+					sendAck(longestOutstandingAck)
 				} else {
 					break moreAcks
 				}
@@ -247,15 +207,21 @@ func (p *Partition) handleAcks() {
 	}
 }
 
+func sendAck(ack *outstandingAck) {
+	defer recover()
+	ack.produceResponse <- &pb.Response{
+		Response: &pb.Response_ProduceAck{
+			ProduceAck: ack.ack,
+		},
+	}
+}
+
 func (p *Partition) NextLSN() uint64 {
 	return p.nextLSNCommitted.Load()
 }
 
 func (p *Partition) Close() error {
 	for {
-		p.logger.Info("Trying to acquire partition lock",
-			zap.String("partitionName", p.Name),
-			zap.Uint64("competingPollGoRoutines", p.pollCommittedGoRoutines.Load()))
 		ok := p.AliveLock.TryLock()
 		if ok {
 			break

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
-	"sync"
 
 	"github.com/lthiede/cartero/consume"
 	"github.com/lthiede/cartero/partition"
@@ -44,8 +43,6 @@ type Connection struct {
 	partitionCache     map[string]*partition.Partition
 	partitionManager   *partitionmanager.PartitionManager
 	partitionConsumers map[string]*consume.PartitionConsumer
-	alive              bool
-	aliveLock          sync.RWMutex
 	responses          chan *pb.Response
 	logger             *zap.Logger
 	quit               chan struct{}
@@ -61,7 +58,6 @@ func New(conn net.Conn, partitionManager *partitionmanager.PartitionManager, log
 		partitionCache:     make(map[string]*partition.Partition),
 		partitionManager:   partitionManager,
 		partitionConsumers: make(map[string]*consume.PartitionConsumer),
-		alive:              true,
 		responses:          make(chan *pb.Response),
 		logger:             logger,
 		quit:               make(chan struct{}),
@@ -136,8 +132,6 @@ outer_loop:
 							BatchId:               produceReq.BatchId,
 							EndOffsetsExclusively: produceReq.EndOffsetsExclusively,
 							Payload:               payload,
-							Alive:                 &c.alive,
-							AliveLock:             &c.aliveLock,
 							ProduceResponse:       c.responses,
 						},
 					}
@@ -236,42 +230,25 @@ func (c *Connection) SendResponse(res *pb.Response) error {
 }
 
 func (c *Connection) handleResponses() {
-	var partition string
 	for {
-		select {
-		case <-c.quit:
-			c.logger.Info("Stop handling responses", zap.String("name", c.name), zap.String("partitionName", partition))
+		response, ok := <-c.responses
+		if !ok {
+			c.logger.Info("Stop handling responses", zap.String("name", c.name))
 			return
-		case response := <-c.responses:
-			ack := response.GetProduceAck()
-			if ack != nil {
-				partition = ack.PartitionName
-			}
-			err := c.SendResponse(response)
-			if err != nil {
-				c.logger.Error("Failed to asynchronously send response", zap.Error(err),
-					zap.String("partitionName", partition),
-					zap.String("name", c.name))
-				c.Close()
-				continue
-			}
+		}
+		err := c.SendResponse(response)
+		if err != nil {
+			c.logger.Error("Failed to asynchronously send response", zap.Error(err),
+				zap.String("name", c.name))
+			c.Close()
+			continue
 		}
 	}
-
 }
 
 func (c *Connection) Close() error {
-	c.logger.Info("Trying to acquire lock to close connection", zap.String("name", c.name))
-	c.aliveLock.Lock()
-	if !c.alive {
-		c.aliveLock.Unlock()
-		return nil
-	}
-	c.alive = false
-	c.logger.Info("Closing connection",
-		zap.String("name", c.name),
-		zap.String("alive", fmt.Sprintf("%t %p", c.alive, &c.alive)))
-	c.aliveLock.Unlock()
+	c.logger.Info("Closing connection", zap.String("name", c.name))
+	close(c.responses)
 	close(c.quit)
 	for _, pc := range c.partitionConsumers {
 		return pc.Close()

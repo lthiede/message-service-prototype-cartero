@@ -180,7 +180,7 @@ func (p *Partition) handleAcks() {
 		p.nextLSNCommitted.Store(lsnAfterCommittedLSN)
 		if longestOutstandingAck != nil {
 			if lsnAfterCommittedLSN >= longestOutstandingAck.ack.StartLsn+uint64(longestOutstandingAck.ack.NumMessages) {
-				sendAck(longestOutstandingAck)
+				p.sendAck(longestOutstandingAck)
 			} else {
 				continue
 			}
@@ -195,7 +195,7 @@ func (p *Partition) handleAcks() {
 					return
 				}
 				if lsnAfterCommittedLSN >= longestOutstandingAck.ack.StartLsn+uint64(longestOutstandingAck.ack.NumMessages) {
-					sendAck(longestOutstandingAck)
+					p.sendAck(longestOutstandingAck)
 				} else {
 					break moreAcks
 				}
@@ -207,8 +207,13 @@ func (p *Partition) handleAcks() {
 	}
 }
 
-func sendAck(ack *outstandingAck) {
-	defer recover()
+func (p *Partition) sendAck(ack *outstandingAck) {
+	defer func() {
+		p.logger.Info("Sent ack")
+		if err := recover(); err != nil {
+			p.logger.Error("Caught error", zap.Any("err", err))
+		}
+	}()
 	ack.produceResponse <- &pb.Response{
 		Response: &pb.Response_ProduceAck{
 			ProduceAck: ack.ack,

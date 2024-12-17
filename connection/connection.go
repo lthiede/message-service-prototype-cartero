@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
+	"sync"
 
 	"github.com/lthiede/cartero/consume"
 	"github.com/lthiede/cartero/partition"
@@ -45,6 +46,8 @@ type Connection struct {
 	partitionConsumers map[string]*consume.PartitionConsumer
 	responses          chan *pb.Response
 	logger             *zap.Logger
+	alive              bool
+	aliveLock          sync.Mutex
 	quit               chan struct{}
 }
 
@@ -60,6 +63,7 @@ func New(conn net.Conn, partitionManager *partitionmanager.PartitionManager, log
 		partitionConsumers: make(map[string]*consume.PartitionConsumer),
 		responses:          make(chan *pb.Response),
 		logger:             logger,
+		alive:              true,
 		quit:               make(chan struct{}),
 	}
 	go c.handleRequests()
@@ -247,7 +251,13 @@ func (c *Connection) handleResponses() {
 }
 
 func (c *Connection) Close() error {
+	c.aliveLock.Lock()
+	defer c.aliveLock.Unlock()
+	if !c.alive {
+		return nil
+	}
 	c.logger.Info("Closing connection", zap.String("name", c.name))
+	c.alive = false
 	close(c.responses)
 	close(c.quit)
 	for _, pc := range c.partitionConsumers {

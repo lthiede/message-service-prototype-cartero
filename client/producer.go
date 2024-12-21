@@ -98,7 +98,6 @@ func (p *Producer) sendSingleMessage(message []byte) error {
 	if err != nil {
 		return fmt.Errorf("failed to send message: %v", err)
 	}
-	p.epoch++
 	return nil
 }
 
@@ -136,6 +135,7 @@ func (p *Producer) scheduleSend(epoch int) {
 	defer p.lock.Unlock()
 	if p.epoch == epoch {
 		// p.client.logger.Info("Scheduled send")
+		// len equals 0 shouldn't happen because then the epoch should be increased
 		if !p.dead && len(p.messages) != 0 {
 			err := p.sendBatch()
 			if err != nil {

@@ -17,16 +17,15 @@ import (
 const MaxMessageSize = 3800
 
 type Partition struct {
-	Name                    string
-	Alive                   bool
-	AliveLock               sync.RWMutex
-	LogInteractionRequests  chan LogInteractionRequest
-	outstandingAcks         chan *outstandingAck
-	newCommittedLSN         chan uint64
-	logClient               *logclient.ClientWrapper
-	logger                  *zap.Logger
-	nextLSNCommitted        atomic.Uint64 // initialized to default value 0
-	pollCommittedGoRoutines atomic.Uint64
+	Name                   string
+	Alive                  bool
+	AliveLock              sync.RWMutex
+	LogInteractionRequests chan LogInteractionRequest
+	outstandingAcks        chan *outstandingAck
+	newCommittedLSN        chan uint64
+	logClient              *logclient.ClientWrapper
+	logger                 *zap.Logger
+	nextLSNCommitted       atomic.Uint64 // initialized to default value 0
 }
 
 type LogInteractionRequest struct {
@@ -113,7 +112,6 @@ func (p *Partition) logInteractions() {
 				return
 			}
 			if lsnAfterCommittedLSN != lsnAfterMostRecentLSN && !checkScheduled {
-				p.pollCommittedGoRoutines.Add(1)
 				go func() {
 					// time.Sleep(MaxCheckLSNDelay)
 					p.AliveLock.RLock()
@@ -131,14 +129,12 @@ func (p *Partition) logInteractions() {
 				lsnAfterLastPolledCommittedLSN = lsnAfterCommittedLSN
 			}
 		} else if lir.pollCommittedRequest != nil {
-			p.pollCommittedGoRoutines.Store(p.pollCommittedGoRoutines.Load() - 1)
 			checkScheduled = false
 			committedLSN, err := p.logClient.PollCompletion()
 			if err != nil {
 				p.logger.Error("Error polling committed LSN", zap.Error(err), zap.String("partitionName", p.Name))
 			}
 			if err != nil || committedLSN+1 < lsnAfterMostRecentLSN {
-				p.pollCommittedGoRoutines.Add(1)
 				go func() {
 					// time.Sleep(MaxCheckLSNDelay)
 					p.AliveLock.RLock()

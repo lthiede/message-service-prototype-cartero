@@ -297,8 +297,8 @@ warmup:
 		}
 	}
 	logger.Info("Starting experiment")
-	go measure(producer, logger, messagesSent)
 	experimentScheduler, quitExperiment := timer(experimentDuration+time.Second, messages)
+	go measure(producer, logger, messagesSent)
 experiment:
 	for {
 		select {
@@ -354,11 +354,11 @@ func timer(duration time.Duration, messages float64) (<-chan struct{}, <-chan st
 
 func measure(producer *client.Producer, logger *zap.Logger, messagesSent chan<- clientResult) {
 	numMeasurements := int(experimentDuration.Seconds() / measurementPeriod.Seconds())
-	startNumMessages := producer.NumMessagesAck()
 	messagesPerSecondMeasurements := make([]float64, numMeasurements)
+	startNumMessages := producer.NumMessagesAck()
 	producer.StartMeasuringLatencies()
-	start := time.Now()
 	for i := range numMeasurements {
+		start := time.Now()
 		time.Sleep(measurementPeriod)
 		endNumMessages := producer.NumMessagesAck()
 		duration := time.Since(start)

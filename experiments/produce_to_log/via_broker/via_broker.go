@@ -61,8 +61,8 @@ func (n *intSlice) Set(value string) error {
 }
 
 type Result struct {
-	MessagesPerSecondMeasurements []uint64
-	BytesPerSecondMeasurements    []uint64
+	MessagesPerSecondMeasurements []float64
+	BytesPerSecondMeasurements    []float64
 	NumLatencyMeasurements        int
 	Latency50Pct                  float64
 	Latency75Pct                  float64
@@ -189,8 +189,8 @@ func oneRun(partitions int, messageSize int, maxBatchSize int, messages int) (*R
 		go oneClient(partitionName, messageSize, maxBatchSize, float64(messages)/float64(numClients), returnChans[i])
 	}
 	numMeasurements := int(experimentDuration.Seconds() / measurementPeriod.Seconds())
-	aggregatedMessagesPerSecond := make([]uint64, numMeasurements)
-	aggregatedBytesPerSecond := make([]uint64, numMeasurements)
+	aggregatedMessagesPerSecond := make([]float64, numMeasurements)
+	aggregatedBytesPerSecond := make([]float64, numMeasurements)
 	latencies := make([]time.Duration, 0)
 	for _, r := range returnChans {
 		clientResult, ok := <-r
@@ -203,7 +203,7 @@ func oneRun(partitions int, messageSize int, maxBatchSize int, messages int) (*R
 		}
 		for i := range numMeasurements {
 			aggregatedMessagesPerSecond[i] += clientResult.MessagesPerSecondMeasurements[i]
-			aggregatedBytesPerSecond[i] += clientResult.MessagesPerSecondMeasurements[i] * uint64(messageSize)
+			aggregatedBytesPerSecond[i] += clientResult.MessagesPerSecondMeasurements[i] * float64(messageSize)
 		}
 		latencies = append(latencies, clientResult.LatencyMeasurements...)
 	}
@@ -240,7 +240,7 @@ func pct(latencies []time.Duration, pct float64) float64 {
 }
 
 type clientResult struct {
-	MessagesPerSecondMeasurements []uint64
+	MessagesPerSecondMeasurements []float64
 	LatencyMeasurements           []time.Duration
 }
 
@@ -306,7 +306,7 @@ warmup:
 	startNumMessages := producer.NumMessagesAck()
 	numMeasurements := int(experimentDuration.Seconds() / measurementPeriod.Seconds())
 	logger.Info("Starting experiment", zap.Int("numMeasurements", numMeasurements), zap.Float64("measurementPeriod", measurementPeriod.Seconds()))
-	messagesPerSecondMeasurements := make([]uint64, numMeasurements)
+	messagesPerSecondMeasurements := make([]float64, numMeasurements)
 	producer.StartMeasuringLatencies()
 	for i := range numMeasurements {
 		logger.Info("iteration", zap.Int("num", i))
@@ -333,7 +333,7 @@ warmup:
 		}
 		endNumMessages := producer.NumMessagesAck()
 		duration := time.Since(start)
-		messagesPerSecondMeasurements[i] = (endNumMessages - startNumMessages) / uint64(duration.Seconds())
+		messagesPerSecondMeasurements[i] = float64(endNumMessages-startNumMessages) / duration.Seconds()
 		startNumMessages = endNumMessages
 	}
 	latencies := producer.StopMeasuringLatencies()

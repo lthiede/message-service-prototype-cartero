@@ -358,6 +358,7 @@ func timer(duration time.Duration, messages float64) (<-chan struct{}, <-chan st
 		for {
 			passed := time.Since(start)
 			if passed >= duration && !closedQuit {
+				closedQuit = true
 				close(quit)
 			}
 			shouldBeScheduled := int64(passed) / int64(waitTime)

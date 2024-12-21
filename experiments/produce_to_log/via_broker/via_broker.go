@@ -182,14 +182,30 @@ func oneRun(partitions int, messageSize int, maxBatchSize int, messages int) (*R
 	}
 	numClients := partitions
 	returnChans := make([]chan clientResult, numClients)
+	warmupChans := make([]chan []float64, numClients)
 	for i := range numClients {
 		returnChans[i] = make(chan clientResult)
+		warmupChans[i] = make(chan []float64)
 	}
 	for i := range numClients {
 		partitionName := partitionNames[i]
-		go oneClient(partitionName, messageSize, maxBatchSize, float64(messages)/float64(numClients), returnChans[i])
+		go oneClient(partitionName, messageSize, maxBatchSize, float64(messages)/float64(numClients), returnChans[i], warmupChans[i])
 	}
 	numMeasurements := int(experimentDuration.Seconds() / measurementPeriod.Seconds())
+	aggregatedMessagesPerSecondWarmup := make([]float64, numMeasurements)
+	for _, warmupChan := range warmupChans {
+		warmupResult, ok := <-warmupChan
+		if !ok {
+			return nil, errors.New("one warmup wasn't successful")
+		}
+		if len(warmupResult) != numMeasurements {
+			return nil, fmt.Errorf("client returned %d warmup measurements but expected %d", len(warmupResult), numMeasurements)
+		}
+		for i := range numMeasurements {
+			aggregatedMessagesPerSecondWarmup[i] += warmupResult[i]
+		}
+	}
+	logger.Info("Received warmup results", zap.Float64s("messagesPerSecond", aggregatedMessagesPerSecondWarmup))
 	aggregatedMessagesPerSecond := make([]float64, numMeasurements)
 	aggregatedBytesPerSecond := make([]float64, numMeasurements)
 	latencies := make([]time.Duration, 0)
@@ -247,7 +263,7 @@ type clientResult struct {
 	LatencyMeasurements           []time.Duration
 }
 
-func oneClient(partitionName string, messageSize int, maxBatchSize int, messages float64, messagesSent chan<- clientResult) {
+func oneClient(partitionName string, messageSize int, maxBatchSize int, messages float64, messagesSent chan<- clientResult, messagesSentWarmup chan []float64) {
 	payload := make([]byte, messageSize)
 	rand.Read(payload)
 	config := zap.NewDevelopmentConfig()
@@ -282,7 +298,7 @@ func oneClient(partitionName string, messageSize int, maxBatchSize int, messages
 	}
 	logger.Info("Starting warmup", zap.Float64("duration", experimentDuration.Seconds()), zap.Uint32("maxOutstanding", producer.MaxOutstanding))
 	warmupScheduler, quitWarmup := timer(experimentDuration, messages)
-	go measureWarmup(producer, logger)
+	go measureWarmup(producer, logger, messagesSentWarmup)
 warmup:
 	for {
 		select {
@@ -381,7 +397,7 @@ func measure(producer *client.Producer, logger *zap.Logger, messagesSent chan<- 
 	}
 }
 
-func measureWarmup(producer *client.Producer, logger *zap.Logger) {
+func measureWarmup(producer *client.Producer, logger *zap.Logger, messagesSentWarmup chan []float64) {
 	numMeasurements := int(experimentDuration.Seconds() / measurementPeriod.Seconds())
 	messagesPerSecondMeasurements := make([]float64, numMeasurements)
 	startNumMessages := producer.NumMessagesAck()
@@ -399,5 +415,5 @@ func measureWarmup(producer *client.Producer, logger *zap.Logger) {
 		return
 	default:
 	}
-	logger.Info("Measured warmup", zap.Float64s("messagesPerSecondMeasurements", messagesPerSecondMeasurements))
+	messagesSentWarmup <- messagesPerSecondMeasurements
 }

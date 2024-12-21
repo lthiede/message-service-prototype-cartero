@@ -280,30 +280,19 @@ func oneClient(partitionName string, messageSize int, maxBatchSize int, messages
 	} else {
 		producer.MaxOutstanding = maxOutstandingAsync
 	}
-	waitInBetweenSends := messages != 0
-	var waitTime time.Duration
-	if waitInBetweenSends {
-		waitTime = time.Duration(float64(int64(time.Second)) / messages)
-	}
 	logger.Info("Starting warmup", zap.Float64("duration", experimentDuration.Seconds()), zap.Uint32("maxOutstanding", producer.MaxOutstanding))
-	warmupFinished := timer(experimentDuration)
+	warmupScheduler := timer(experimentDuration, messages)
 warmup:
 	for {
-		start := time.Now()
-		select {
-		case <-warmupFinished:
+		_, ok := <-warmupScheduler
+		if !ok {
 			break warmup
-		default:
-			err := producer.AddMessage(payload)
-			if err != nil {
-				logger.Error("Error adding message", zap.Error(err))
-				close(messagesSent)
-				return
-			}
 		}
-		if waitInBetweenSends {
-			passed := time.Since(start)
-			time.Sleep(waitTime - passed)
+		err := producer.AddMessage(payload)
+		if err != nil {
+			logger.Error("Error adding message", zap.Error(err))
+			close(messagesSent)
+			return
 		}
 	}
 	startNumMessages := producer.NumMessagesAck()
@@ -313,25 +302,19 @@ warmup:
 	producer.StartMeasuringLatencies()
 	for i := range numMeasurements {
 		logger.Info("iteration", zap.Int("num", i))
-		periodFinished := timer(measurementPeriod)
+		periodScheduler := timer(measurementPeriod, messages)
 		start := time.Now()
 	experiment:
 		for {
-			start := time.Now()
-			select {
-			case <-periodFinished:
+			_, ok := <-periodScheduler
+			if !ok {
 				break experiment
-			default:
-				err := producer.AddMessage(payload)
-				if err != nil {
-					logger.Error("Error adding message", zap.Error(err))
-					close(messagesSent)
-					return
-				}
 			}
-			if waitInBetweenSends {
-				passed := time.Since(start)
-				time.Sleep(waitTime - passed)
+			err := producer.AddMessage(payload)
+			if err != nil {
+				logger.Error("Error adding message", zap.Error(err))
+				close(messagesSent)
+				return
 			}
 		}
 		endNumMessages := producer.NumMessagesAck()
@@ -354,11 +337,26 @@ warmup:
 	}
 }
 
-func timer(duration time.Duration) <-chan struct{} {
-	done := make(chan struct{})
+func timer(duration time.Duration, messages float64) <-chan struct{} {
+	scheduler := make(chan struct{}, 200)
 	go func() {
-		time.Sleep(duration)
-		close(done)
+		if messages == 0 {
+			time.Sleep(duration)
+			close(scheduler)
+			return
+		}
+		scheduler <- struct{}{}
+		start := time.Now()
+		var numScheduled int64
+		waitTime := time.Duration(float64(int64(time.Second)) / messages)
+		for {
+			passed := time.Since(start)
+			shouldBeScheduled := int64(passed) / int64(waitTime)
+			for numScheduled < shouldBeScheduled {
+				scheduler <- struct{}{}
+				numScheduled++
+			}
+		}
 	}()
-	return done
+	return scheduler
 }

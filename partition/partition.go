@@ -76,8 +76,6 @@ func New(name string, logAddresses []string, logger *zap.Logger) (*Partition, er
 	return p, nil
 }
 
-// var MaxCheckLSNDelay = 200 * time.Microsecond
-
 // TODO: try passing a batch of messages via cgo interface
 // Don't add a channel select to this function
 // Receiving on the channel is not a bottleneck
@@ -113,7 +111,6 @@ func (p *Partition) logInteractions() {
 			}
 			if lsnAfterCommittedLSN != lsnAfterMostRecentLSN && !checkScheduled {
 				go func() {
-					// time.Sleep(MaxCheckLSNDelay)
 					p.AliveLock.RLock()
 					defer p.AliveLock.RUnlock()
 					if p.Alive {
@@ -136,7 +133,6 @@ func (p *Partition) logInteractions() {
 			}
 			if err != nil || committedLSN+1 < lsnAfterMostRecentLSN {
 				go func() {
-					// time.Sleep(MaxCheckLSNDelay)
 					p.AliveLock.RLock()
 					defer p.AliveLock.RUnlock()
 					if p.Alive {

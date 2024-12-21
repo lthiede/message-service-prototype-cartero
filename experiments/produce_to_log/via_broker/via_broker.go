@@ -282,6 +282,7 @@ func oneClient(partitionName string, messageSize int, maxBatchSize int, messages
 	}
 	logger.Info("Starting warmup", zap.Float64("duration", experimentDuration.Seconds()), zap.Uint32("maxOutstanding", producer.MaxOutstanding))
 	warmupScheduler, quitWarmup := timer(experimentDuration, messages)
+	go measureWarmup(producer, logger)
 warmup:
 	for {
 		select {
@@ -378,4 +379,25 @@ func measure(producer *client.Producer, logger *zap.Logger, messagesSent chan<- 
 		MessagesPerSecondMeasurements: messagesPerSecondMeasurements,
 		LatencyMeasurements:           latencies,
 	}
+}
+
+func measureWarmup(producer *client.Producer, logger *zap.Logger) {
+	numMeasurements := int(experimentDuration.Seconds() / measurementPeriod.Seconds())
+	messagesPerSecondMeasurements := make([]float64, numMeasurements)
+	startNumMessages := producer.NumMessagesAck()
+	for i := range numMeasurements {
+		start := time.Now()
+		time.Sleep(measurementPeriod)
+		endNumMessages := producer.NumMessagesAck()
+		duration := time.Since(start)
+		messagesPerSecondMeasurements[i] = float64(endNumMessages-startNumMessages) / duration.Seconds()
+		startNumMessages = endNumMessages
+	}
+	select {
+	case err := <-producer.AsyncError:
+		logger.Error("Producer had asynchronous error", zap.Error(err.Err))
+		return
+	default:
+	}
+	logger.Info("Measured warmup", zap.Float64s("messagesPerSecondMeasurements", messagesPerSecondMeasurements))
 }

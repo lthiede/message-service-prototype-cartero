@@ -296,47 +296,22 @@ warmup:
 			break warmup
 		}
 	}
-	startNumMessages := producer.NumMessagesAck()
-	numMeasurements := int(experimentDuration.Seconds() / measurementPeriod.Seconds())
-	logger.Info("Starting experiment", zap.Int("numMeasurements", numMeasurements), zap.Float64("measurementPeriod", measurementPeriod.Seconds()))
-	messagesPerSecondMeasurements := make([]float64, numMeasurements)
-	producer.StartMeasuringLatencies()
-	for i := range numMeasurements {
-		logger.Info("iteration", zap.Int("num", i))
-		periodScheduler, quitPeriod := timer(measurementPeriod, messages)
-		start := time.Now()
-	experiment:
-		for {
-			select {
-			case <-periodScheduler:
-				err := producer.AddMessage(payload)
-				if err != nil {
-					logger.Error("Error adding message", zap.Error(err))
-					close(messagesSent)
-					return
-				}
-			case <-quitPeriod:
-				break experiment
+	logger.Info("Starting experiment")
+	go measure(producer, logger, messagesSent)
+	experimentScheduler, quitExperiment := timer(experimentDuration+time.Second, messages)
+experiment:
+	for {
+		select {
+		case <-experimentScheduler:
+			err := producer.AddMessage(payload)
+			if err != nil {
+				logger.Error("Error adding message", zap.Error(err))
+				close(messagesSent)
+				return
 			}
+		case <-quitExperiment:
+			break experiment
 		}
-		endNumMessages := producer.NumMessagesAck()
-		duration := time.Since(start)
-		logger.Info("Iteration finished", zap.Float64("actualDuration", duration.Seconds()))
-		messagesPerSecondMeasurements[i] = float64(endNumMessages-startNumMessages) / duration.Seconds()
-		startNumMessages = endNumMessages
-	}
-	latencies := producer.StopMeasuringLatencies()
-	select {
-	case err := <-producer.AsyncError:
-		logger.Error("Producer had asynchronous error", zap.Error(err.Err))
-		close(messagesSent)
-		return
-	default:
-	}
-	logger.Info("Returning measurements", zap.Float64s("messagesPerSecondMeasurements", messagesPerSecondMeasurements))
-	messagesSent <- clientResult{
-		MessagesPerSecondMeasurements: messagesPerSecondMeasurements,
-		LatencyMeasurements:           latencies,
 	}
 }
 
@@ -375,4 +350,32 @@ func timer(duration time.Duration, messages float64) (<-chan struct{}, <-chan st
 		}
 	}()
 	return scheduler, quit
+}
+
+func measure(producer *client.Producer, logger *zap.Logger, messagesSent chan<- clientResult) {
+	numMeasurements := int(experimentDuration.Seconds() / measurementPeriod.Seconds())
+	startNumMessages := producer.NumMessagesAck()
+	messagesPerSecondMeasurements := make([]float64, numMeasurements)
+	producer.StartMeasuringLatencies()
+	start := time.Now()
+	for i := range numMeasurements {
+		time.Sleep(measurementPeriod)
+		endNumMessages := producer.NumMessagesAck()
+		duration := time.Since(start)
+		messagesPerSecondMeasurements[i] = float64(endNumMessages-startNumMessages) / duration.Seconds()
+		startNumMessages = endNumMessages
+	}
+	select {
+	case err := <-producer.AsyncError:
+		logger.Error("Producer had asynchronous error", zap.Error(err.Err))
+		close(messagesSent)
+		return
+	default:
+	}
+	latencies := producer.StopMeasuringLatencies()
+	logger.Info("Returning latencies")
+	messagesSent <- clientResult{
+		MessagesPerSecondMeasurements: messagesPerSecondMeasurements,
+		LatencyMeasurements:           latencies,
+	}
 }

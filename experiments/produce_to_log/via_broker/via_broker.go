@@ -321,6 +321,7 @@ warmup:
 		}
 		endNumMessages := producer.NumMessagesAck()
 		duration := time.Since(start)
+		logger.Info("Iteration finished", zap.Float64("actualDuration", duration.Seconds()))
 		messagesPerSecondMeasurements[i] = float64(endNumMessages-startNumMessages) / duration.Seconds()
 		startNumMessages = endNumMessages
 	}

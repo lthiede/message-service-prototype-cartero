@@ -74,6 +74,7 @@ type Result struct {
 	Partitions                    int
 	MessageSize                   int
 	MaxBatchSize                  int
+	MessagesPerSecondConfigured   int
 }
 
 func main() {
@@ -213,6 +214,7 @@ func oneRun(partitions int, messageSize int, maxBatchSize int, messages int) (*R
 	}
 	logger.Info("Successfully deleted partition", zap.String("partitionName", basePartitionName))
 	slices.Sort(latencies)
+	logger.Info("Returning measurements", zap.Float64s("messagesPerSecond", aggregatedMessagesPerSecond))
 	return &Result{
 		MessagesPerSecondMeasurements: aggregatedMessagesPerSecond,
 		BytesPerSecondMeasurements:    aggregatedBytesPerSecond,
@@ -227,6 +229,7 @@ func oneRun(partitions int, messageSize int, maxBatchSize int, messages int) (*R
 		Partitions:                    partitions,
 		MessageSize:                   messageSize,
 		MaxBatchSize:                  maxBatchSize,
+		MessagesPerSecondConfigured:   messages,
 	}, nil
 }
 
@@ -344,6 +347,7 @@ warmup:
 		return
 	default:
 	}
+	logger.Info("Returning measurements", zap.Float64s("messagesPerSecondMeasurements", messagesPerSecondMeasurements))
 	messagesSent <- clientResult{
 		MessagesPerSecondMeasurements: messagesPerSecondMeasurements,
 		LatencyMeasurements:           latencies,

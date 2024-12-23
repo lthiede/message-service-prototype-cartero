@@ -341,23 +341,23 @@ func timer(duration time.Duration, messages float64) (<-chan struct{}, <-chan st
 
 func measure(producer *client.Producer, logger *zap.Logger, messagesSent chan<- clientResult) {
 	numMeasurements := int(experimentDuration.Seconds() / measurementPeriod.Seconds())
-	messagesPerSecondMeasurements := make([]float64, 2*numMeasurements)
+	messagesPerSecondMeasurements := make([]float64, 0, 2*numMeasurements)
 	startNumMessages := producer.NumMessagesAck()
-	for i := range numMeasurements {
+	for range numMeasurements {
 		start := time.Now()
 		time.Sleep(measurementPeriod)
 		endNumMessages := producer.NumMessagesAck()
 		duration := time.Since(start)
-		messagesPerSecondMeasurements[i] = float64(endNumMessages-startNumMessages) / duration.Seconds()
+		messagesPerSecondMeasurements = append(messagesPerSecondMeasurements, float64(endNumMessages-startNumMessages)/duration.Seconds())
 		startNumMessages = endNumMessages
 	}
 	producer.StartMeasuringLatencies()
-	for i := range numMeasurements {
+	for range numMeasurements {
 		start := time.Now()
 		time.Sleep(measurementPeriod)
 		endNumMessages := producer.NumMessagesAck()
 		duration := time.Since(start)
-		messagesPerSecondMeasurements[i] = float64(endNumMessages-startNumMessages) / duration.Seconds()
+		messagesPerSecondMeasurements = append(messagesPerSecondMeasurements, float64(endNumMessages-startNumMessages)/duration.Seconds())
 		startNumMessages = endNumMessages
 	}
 	select {

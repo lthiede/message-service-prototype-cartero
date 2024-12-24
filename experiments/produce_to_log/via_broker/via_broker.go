@@ -25,9 +25,9 @@ const maxOutstandingAsync uint32 = 524288
 type stringSlice []string
 type intSlice []int
 
-var logAddressFlag stringSlice // o
-var partitionsFlag intSlice    // p
-// var producersPerPartitionFlag intSlice // n
+var logAddressFlag stringSlice     // o
+var partitionsFlag intSlice        // p
+var connectionsFlag intSlice       // n
 var messagesPerSecondFlag intSlice // m
 var messageSizes intSlice          // l
 var batchSizes intSlice            // a
@@ -72,6 +72,7 @@ type Result struct {
 	Latency9999Pct                float64
 	Sync                          bool
 	Partitions                    int
+	Connections                   int
 	MessageSize                   int
 	MaxBatchSize                  int
 	MessagesPerSecondConfigured   int
@@ -81,7 +82,7 @@ func main() {
 	flag.Var(&logAddressFlag, "o", "addresses of log nodes")
 	flag.Var(&partitionsFlag, "p", "number of partitions")
 	flag.Var(&messagesPerSecondFlag, "m", "target messages per second")
-	// flag.Var(&producersPerPartitionFlag, "n", "number of producers per partition")
+	flag.Var(&connectionsFlag, "n", "number of connections to broker")
 	flag.Var(&messageSizes, "l", "number of bytes per message")
 	flag.Var(&batchSizes, "a", "max number of bytes per batch")
 	flag.Parse()
@@ -109,65 +110,62 @@ func main() {
 	for _, messageSize := range messageSizes {
 		for _, messages := range messagesPerSecondFlag {
 			for _, partitions := range partitionsFlag {
-				// for _, clientsPerPartition := range producersPerPartitionFlag {
 				for _, batchSize := range batchSizes {
-					result, err := oneRun(partitions, messageSize, batchSize, messages)
-					if err != nil {
-						logger.Error("Run failed",
-							zap.Int("numPartitions", partitions),
-							zap.Int("bytesPerMessage", messageSize),
-							zap.Int("maxBytesPerBatch", batchSize),
-							zap.Int("messagesPerSecond", messages),
-							zap.Error(err))
-						return
-					}
-					text, err := json.Marshal(result)
-					if err != nil {
-						logger.Error("Marshal of results failed",
-							zap.Int("numPartitions", partitions),
-							zap.Int("bytesPerMessage", messageSize),
-							zap.Int("maxBytesPerBatch", batchSize),
-							zap.Int("messagesPerSecond", messages),
-							zap.Error(err))
-						return
-					}
-					fmt.Println(string(text))
-					output, err := os.Create(fmt.Sprintf("results_%d_p_%d_b_%d_b_%d_mxs.json", partitions, messageSize, batchSize, messages))
-					if err != nil {
-						logger.Error("Creating output file failed",
-							zap.Int("numPartitions", partitions),
-							zap.Int("bytesPerMessage", messageSize),
-							zap.Int("maxBytesPerBatch", batchSize),
-							zap.Int("messagesPerSecond", messages),
-							zap.Error(err))
-						return
-					}
-					_, err = output.Write(text)
-					if err != nil {
-						logger.Error("Writing to output file failed",
-							zap.Int("numPartitions", partitions),
-							zap.Int("bytesPerMessage", messageSize),
-							zap.Int("maxBytesPerBatch", batchSize),
-							zap.Int("messagesPerSecond", messages),
-							zap.Error(err))
-						return
+					for _, connections := range connectionsFlag {
+						result, err := oneRun(partitions, connections, messageSize, batchSize, messages, logger)
+						if err != nil {
+							logger.Error("Run failed",
+								zap.Int("numPartitions", partitions),
+								zap.Int("numConnections", connections),
+								zap.Int("bytesPerMessage", messageSize),
+								zap.Int("maxBytesPerBatch", batchSize),
+								zap.Int("messagesPerSecond", messages),
+								zap.Error(err))
+							return
+						}
+						text, err := json.Marshal(result)
+						if err != nil {
+							logger.Error("Marshal of results failed",
+								zap.Int("numPartitions", partitions),
+								zap.Int("numConnections", connections),
+								zap.Int("bytesPerMessage", messageSize),
+								zap.Int("maxBytesPerBatch", batchSize),
+								zap.Int("messagesPerSecond", messages),
+								zap.Error(err))
+							return
+						}
+						fmt.Println(string(text))
+						output, err := os.Create(fmt.Sprintf("results_%d_p_%d_b_%d_b_%d_mxs.json", partitions, messageSize, batchSize, messages))
+						if err != nil {
+							logger.Error("Creating output file failed",
+								zap.Int("numPartitions", partitions),
+								zap.Int("numConnections", connections),
+								zap.Int("bytesPerMessage", messageSize),
+								zap.Int("maxBytesPerBatch", batchSize),
+								zap.Int("messagesPerSecond", messages),
+								zap.Error(err))
+							return
+						}
+						_, err = output.Write(text)
+						if err != nil {
+							logger.Error("Writing to output file failed",
+								zap.Int("numPartitions", partitions),
+								zap.Int("numConnections", connections),
+								zap.Int("bytesPerMessage", messageSize),
+								zap.Int("maxBytesPerBatch", batchSize),
+								zap.Int("messagesPerSecond", messages),
+								zap.Error(err))
+							return
+						}
 					}
 				}
-				// }
 			}
 		}
 	}
 }
 
-func oneRun(partitions int, messageSize int, maxBatchSize int, messages int) (*Result, error) {
-	config := zap.NewDevelopmentConfig()
-	config.Level.SetLevel(zapcore.InfoLevel)
-	config.OutputPaths = []string{fmt.Sprintf("./setup_client_%d_%d_%d_%d", partitions, messageSize, maxBatchSize, messages)}
-	logger, err := config.Build()
-	if err != nil {
-		return nil, fmt.Errorf("error building logger: %v", err)
-	}
-	setupClient, err := client.New(*sFlag, logger)
+func oneRun(partitions int, connections int, messageSize int, maxBatchSize int, messages int, logger *zap.Logger) (*Result, error) {
+	setupClient, err := createClient(fmt.Sprintf("./setup_client_%d_%d_%d_%d_%d", partitions, connections, messageSize, maxBatchSize, messages))
 	if err != nil {
 		return nil, fmt.Errorf("error creating client: %v", err)
 	}
@@ -180,14 +178,28 @@ func oneRun(partitions int, messageSize int, maxBatchSize int, messages int) (*R
 	for i := range partitions {
 		partitionNames[i] = fmt.Sprintf("%s%d", basePartitionName, i)
 	}
-	numClients := partitions
-	returnChans := make([]chan clientResult, numClients)
-	for i := range numClients {
+	var numProducers int
+	if connections > partitions {
+		numProducers = connections
+	} else {
+		numProducers = partitions
+	}
+	returnChans := make([]chan clientResult, numProducers)
+	for i := range numProducers {
 		returnChans[i] = make(chan clientResult)
 	}
-	for i := range numClients {
-		partitionName := partitionNames[i]
-		go oneClient(partitionName, messageSize, maxBatchSize, float64(messages)/float64(numClients), returnChans[i])
+	clients := make([]*client.Client, connections)
+	for i := range connections {
+		c, err := createClient(fmt.Sprintf("client_%d_%d_%d_%d_%d", partitions, connections, messageSize, maxBatchSize, messages))
+		if err != nil {
+			return nil, fmt.Errorf("error creating client: %v", err)
+		}
+		clients[i] = c
+	}
+	for i := range numProducers {
+		partitionName := partitionNames[i%partitions]
+		c := clients[i%connections]
+		go oneClient(partitionName, messageSize, maxBatchSize, float64(messages)/float64(numProducers), c, logger, returnChans[i])
 	}
 	numMeasurements := int(experimentDuration.Seconds() / measurementPeriod.Seconds())
 	aggregatedMessagesPerSecond := make([]float64, numMeasurements*2)
@@ -208,6 +220,9 @@ func oneRun(partitions int, messageSize int, maxBatchSize int, messages int) (*R
 		}
 		latencies = append(latencies, clientResult.LatencyMeasurements...)
 	}
+	for _, c := range clients {
+		c.Close()
+	}
 	err = setupClient.DeletePartition(basePartitionName, uint32(partitions))
 	if err != nil {
 		return nil, fmt.Errorf("error deleting partitions: %v", err)
@@ -227,6 +242,7 @@ func oneRun(partitions int, messageSize int, maxBatchSize int, messages int) (*R
 		Latency9999Pct:                pct(latencies, 0.9999),
 		Sync:                          *cFlag,
 		Partitions:                    partitions,
+		Connections:                   connections,
 		MessageSize:                   messageSize,
 		MaxBatchSize:                  maxBatchSize,
 		MessagesPerSecondConfigured:   messages,
@@ -247,26 +263,26 @@ type clientResult struct {
 	LatencyMeasurements           []time.Duration
 }
 
-func oneClient(partitionName string, messageSize int, maxBatchSize int, messages float64, messagesSent chan<- clientResult) {
-	payload := make([]byte, messageSize)
-	rand.Read(payload)
+func createClient(name string) (*client.Client, error) {
 	config := zap.NewDevelopmentConfig()
 	config.Level.SetLevel(zapcore.InfoLevel)
-	config.OutputPaths = []string{fmt.Sprintf("%s_%d_b_%d_b_%g_mxs", partitionName, messageSize, maxBatchSize, messages)}
+	config.OutputPaths = []string{name}
 	logger, err := config.Build()
 	if err != nil {
-		logger.Error("Error building logger", zap.Error(err))
-		close(messagesSent)
-		return
+		return nil, fmt.Errorf("failed to build logger: %v", err)
 	}
-	client, err := client.New(*sFlag, logger)
+	c, err := client.New(*sFlag, logger)
 	if err != nil {
 		logger.Error("Error creating client", zap.Error(err))
-		close(messagesSent)
-		return
+		return nil, fmt.Errorf("failed to create client: %v", err)
 	}
-	defer client.Close()
-	producer, err := client.NewProducer(partitionName, false)
+	return c, err
+}
+
+func oneClient(partitionName string, messageSize int, maxBatchSize int, messages float64, c *client.Client, logger *zap.Logger, messagesSent chan<- clientResult) {
+	payload := make([]byte, messageSize)
+	rand.Read(payload)
+	producer, err := c.NewProducer(partitionName, false)
 	if err != nil {
 		logger.Error("Error creating producer", zap.Error(err))
 		close(messagesSent)

@@ -135,7 +135,7 @@ func main() {
 							return
 						}
 						fmt.Println(string(text))
-						output, err := os.Create(fmt.Sprintf("results_%d_p_%d_b_%d_b_%d_mxs.json", partitions, messageSize, batchSize, messages))
+						output, err := os.Create(fmt.Sprintf("results_%d_p_%d_c_%d_b_%d_b_%d_mxs.json", partitions, connections, messageSize, batchSize, messages))
 						if err != nil {
 							logger.Error("Creating output file failed",
 								zap.Int("numPartitions", partitions),

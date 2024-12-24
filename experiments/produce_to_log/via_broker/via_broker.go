@@ -374,24 +374,3 @@ func measure(producer *client.Producer, logger *zap.Logger, messagesSent chan<- 
 		LatencyMeasurements:           latencies,
 	}
 }
-
-// func measureWarmup(producer *client.Producer, logger *zap.Logger, messagesSentWarmup chan []float64) {
-// 	numMeasurements := int(experimentDuration.Seconds() / measurementPeriod.Seconds())
-// 	messagesPerSecondMeasurements := make([]float64, numMeasurements)
-// 	startNumMessages := producer.NumMessagesAck()
-// 	for i := range numMeasurements {
-// 		start := time.Now()
-// 		time.Sleep(measurementPeriod)
-// 		endNumMessages := producer.NumMessagesAck()
-// 		duration := time.Since(start)
-// 		messagesPerSecondMeasurements[i] = float64(endNumMessages-startNumMessages) / duration.Seconds()
-// 		startNumMessages = endNumMessages
-// 	}
-// 	select {
-// 	case err := <-producer.AsyncError:
-// 		logger.Error("Producer had asynchronous error", zap.Error(err.Err))
-// 		return
-// 	default:
-// 	}
-// 	messagesSentWarmup <- messagesPerSecondMeasurements
-// }

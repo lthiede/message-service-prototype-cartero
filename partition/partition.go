@@ -104,6 +104,7 @@ func (p *Partition) logInteractions() {
 		if abr := lir.AppendBatchRequest; abr != nil {
 			getAppendBatchRequestDuration = append(getAppendBatchRequestDuration, time.Since(startLogInteractionRequest))
 			numMessages := uint32(len(abr.EndOffsetsExclusively))
+			startPassOutstanding := time.Now()
 			p.outstandingAcks <- &outstandingAck{
 				ack: &pb.ProduceAck{
 					BatchId:       abr.BatchId,
@@ -113,8 +114,11 @@ func (p *Partition) logInteractions() {
 				},
 				produceResponse: abr.ProduceResponse,
 			}
+			passOutstandingDuration = append(passOutstandingDuration, time.Since(startPassOutstanding))
 			lsnAfterMostRecentLSN += uint64(numMessages)
+			startAppendBatch := time.Now()
 			lsnAfterCommittedLSN, err := p.logClient.AppendAsync(abr.Payload, abr.EndOffsetsExclusively)
+			appendBatchDuration = append(appendBatchDuration, time.Since(startAppendBatch))
 			if err != nil {
 				p.logger.Error("Error appending batch to log", zap.Error(err), zap.String("partitionName", p.Name))
 				return
@@ -124,13 +128,17 @@ func (p *Partition) logInteractions() {
 				checkScheduled = true
 			}
 			if lsnAfterCommittedLSN != 0 && lsnAfterCommittedLSN != lsnAfterLastPolledCommittedLSN {
+				startPassNewCommitted := time.Now()
 				p.newCommittedLSN <- lsnAfterCommittedLSN
+				passNewCommittedDuration = append(passNewCommittedDuration, time.Since(startPassNewCommitted))
 				lsnAfterLastPolledCommittedLSN = lsnAfterCommittedLSN
 			}
 		} else if lir.pollCommittedRequest != nil {
 			getPollCommittedRequestDuration = append(getPollCommittedRequestDuration, time.Since(startLogInteractionRequest))
 			checkScheduled = false
+			startPollCommittedDuration := time.Now()
 			committedLSN, err := p.logClient.PollCompletion()
+			pollCommittedDuration = append(pollCommittedDuration, time.Since(startPollCommittedDuration))
 			if err != nil {
 				p.logger.Error("Error polling committed LSN", zap.Error(err), zap.String("partitionName", p.Name))
 			}
@@ -139,7 +147,9 @@ func (p *Partition) logInteractions() {
 				checkScheduled = true
 			}
 			if err == nil && committedLSN+1 != lsnAfterLastPolledCommittedLSN {
+				startPassNewCommitted := time.Now()
 				p.newCommittedLSN <- committedLSN + 1
+				passNewCommittedDuration = append(passNewCommittedDuration, time.Since(startPassNewCommitted))
 				lsnAfterLastPolledCommittedLSN = committedLSN + 1
 			}
 		}

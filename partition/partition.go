@@ -135,6 +135,7 @@ func (p *Partition) sendPollCommittedRequest() {
 			p.logger.Error("Caught error", zap.Any("err", err))
 		}
 	}()
+	time.Sleep(50 * time.Microsecond)
 	p.LogInteractionRequests <- LogInteractionRequest{
 		pollCommittedRequest: &struct{}{},
 	}

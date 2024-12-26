@@ -320,8 +320,6 @@ experiment:
 			err := producer.AddMessage(possiblePayloads[mathrand.Intn(numPossiblePayloads)])
 			if err != nil {
 				logger.Error("Error adding message", zap.Error(err))
-				close(messagesSent)
-				return
 			}
 		case <-quitExperiment:
 			break experiment

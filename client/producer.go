@@ -96,7 +96,7 @@ func (p *Producer) sendSingleMessage(message []byte) error {
 	p.endOffsetsExclusively = []uint32{uint32(len(message))}
 	err := p.sendBatch()
 	if err != nil {
-		return fmt.Errorf("failed to send message: %v", err)
+		return fmt.Errorf("failed to send single message: %v", err)
 	}
 	return nil
 }
@@ -113,7 +113,7 @@ func (p *Producer) addMessageToBatch(message []byte) error {
 		// p.client.logger.Info("Max batch size reached send")
 		err := p.sendBatch()
 		if err != nil {
-			return fmt.Errorf("failed to send batch: %v", err)
+			return fmt.Errorf("failed to send full batch: %v", err)
 		}
 		newPayloadSize = uint32(len(message))
 		p.epoch++
@@ -141,7 +141,7 @@ func (p *Producer) scheduleSend(epoch int) {
 			if err != nil {
 				p.AsyncError <- ProducerError{
 					Messages: p.messages,
-					Err:      fmt.Errorf("failed to send batch: %v", err),
+					Err:      fmt.Errorf("failed to asynchronously send batch: %v", err),
 				}
 			}
 		}
@@ -163,8 +163,13 @@ func (p *Producer) sendBatch() error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal batch: %v", err)
 	}
+	var timeWaited time.Duration
 	for p.numMessagesSend >= p.numMessagesAck.Load()+uint64(p.MaxOutstanding) {
 		time.Sleep(100 * time.Microsecond)
+		timeWaited += 100 * time.Microsecond
+		if timeWaited >= time.Second {
+			return errors.New("Timed out waiting for enough acks")
+		}
 	}
 	p.client.connWriteMutex.Lock()
 	if p.measureLatencies.Load() && !p.waiting.Load() {

@@ -3,7 +3,6 @@ package partition
 import (
 	"fmt"
 	"math"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -18,8 +17,6 @@ const MaxMessageSize = 3800
 
 type Partition struct {
 	Name                   string
-	Alive                  bool
-	AliveLock              sync.RWMutex
 	LogInteractionRequests chan LogInteractionRequest
 	outstandingAcks        chan *outstandingAck
 	newCommittedLSN        chan uint64
@@ -37,8 +34,6 @@ type AppendBatchRequest struct {
 	BatchId               uint64
 	EndOffsetsExclusively []uint32
 	Payload               []byte
-	Alive                 *bool
-	AliveLock             *sync.RWMutex
 	ProduceResponse       chan *pb.Response
 }
 
@@ -64,7 +59,6 @@ func New(name string, logAddresses []string, logger *zap.Logger) (*Partition, er
 	}
 	p := &Partition{
 		Name:                   name,
-		Alive:                  true,
 		outstandingAcks:        make(chan *outstandingAck, logclient.MaxOutstanding+1),
 		newCommittedLSN:        make(chan uint64),
 		LogInteractionRequests: make(chan LogInteractionRequest),
@@ -110,15 +104,7 @@ func (p *Partition) logInteractions() {
 				return
 			}
 			if lsnAfterCommittedLSN != lsnAfterMostRecentLSN && !checkScheduled {
-				go func() {
-					p.AliveLock.RLock()
-					defer p.AliveLock.RUnlock()
-					if p.Alive {
-						p.LogInteractionRequests <- LogInteractionRequest{
-							pollCommittedRequest: &struct{}{},
-						}
-					}
-				}()
+				go p.sendPollCommittedRequest()
 				checkScheduled = true
 			}
 			if lsnAfterCommittedLSN != 0 && lsnAfterCommittedLSN != lsnAfterLastPolledCommittedLSN {
@@ -132,15 +118,7 @@ func (p *Partition) logInteractions() {
 				p.logger.Error("Error polling committed LSN", zap.Error(err), zap.String("partitionName", p.Name))
 			}
 			if err != nil || committedLSN+1 < lsnAfterMostRecentLSN {
-				go func() {
-					p.AliveLock.RLock()
-					defer p.AliveLock.RUnlock()
-					if p.Alive {
-						p.LogInteractionRequests <- LogInteractionRequest{
-							pollCommittedRequest: &struct{}{},
-						}
-					}
-				}()
+				go p.sendPollCommittedRequest()
 				checkScheduled = true
 			}
 			if err == nil && committedLSN+1 != lsnAfterLastPolledCommittedLSN {
@@ -148,6 +126,17 @@ func (p *Partition) logInteractions() {
 				lsnAfterLastPolledCommittedLSN = committedLSN + 1
 			}
 		}
+	}
+}
+
+func (p *Partition) sendPollCommittedRequest() {
+	defer func() {
+		if err := recover(); err != nil {
+			p.logger.Error("Caught error", zap.Any("err", err))
+		}
+	}()
+	p.LogInteractionRequests <- LogInteractionRequest{
+		pollCommittedRequest: &struct{}{},
 	}
 }
 
@@ -217,16 +206,6 @@ func (p *Partition) NextLSN() uint64 {
 }
 
 func (p *Partition) Close() error {
-	for {
-		ok := p.AliveLock.TryLock()
-		if ok {
-			break
-		} else {
-			time.Sleep(1 * time.Second)
-		}
-	}
-	defer p.AliveLock.Unlock()
-	p.Alive = false
 	p.logger.Info("Closing partition", zap.String("partitionName", p.Name))
 	close(p.LogInteractionRequests)
 	return nil

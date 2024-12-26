@@ -170,13 +170,14 @@ func oneRun(partitions int, connections int, messageSize int, maxBatchSize int, 
 		return nil, fmt.Errorf("error creating client: %v", err)
 	}
 	defer setupClient.Close()
-	err = setupClient.CreatePartition(basePartitionName, uint32(partitions))
+	oneRunTopicName := fmt.Sprintf("%s_%d_%d_%d_%d_%d_", basePartitionName, partitions, connections, messageSize, maxBatchSize, messages)
+	err = setupClient.CreatePartition(oneRunTopicName, uint32(partitions))
 	if err != nil {
 		return nil, fmt.Errorf("error creating partitions: %v", err)
 	}
 	partitionNames := make([]string, partitions)
 	for i := range partitions {
-		partitionNames[i] = fmt.Sprintf("%s%d", basePartitionName, i)
+		partitionNames[i] = fmt.Sprintf("%s%d", oneRunTopicName, i)
 	}
 	var numProducers int
 	if connections > partitions {
@@ -223,11 +224,11 @@ func oneRun(partitions int, connections int, messageSize int, maxBatchSize int, 
 	for _, c := range clients {
 		c.Close()
 	}
-	err = setupClient.DeletePartition(basePartitionName, uint32(partitions))
+	err = setupClient.DeletePartition(oneRunTopicName, uint32(partitions))
 	if err != nil {
 		return nil, fmt.Errorf("error deleting partitions: %v", err)
 	}
-	logger.Info("Successfully deleted partition", zap.String("partitionName", basePartitionName))
+	logger.Info("Successfully deleted partition", zap.String("partitionName", oneRunTopicName))
 	slices.Sort(latencies)
 	logger.Info("Returning measurements", zap.Float64s("messagesPerSecond", aggregatedMessagesPerSecond))
 	return &Result{

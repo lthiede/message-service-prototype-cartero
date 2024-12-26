@@ -312,6 +312,11 @@ experiment:
 			}
 		case <-quitExperiment:
 			break experiment
+		case producerErr := <-producer.AsyncError:
+			err := producerErr.Err
+			logger.Error("Async error in producer", zap.Error(err))
+			close(messagesSent)
+			return
 		}
 	}
 	r, ok := <-measurements
@@ -385,13 +390,6 @@ func measure(producer *client.Producer, logger *zap.Logger) chan clientResult {
 			duration := time.Since(start)
 			messagesPerSecondMeasurements = append(messagesPerSecondMeasurements, float64(endNumMessages-startNumMessages)/duration.Seconds())
 			startNumMessages = endNumMessages
-		}
-		select {
-		case err := <-producer.AsyncError:
-			logger.Error("Producer had asynchronous error", zap.Error(err.Err))
-			close(messagesSent)
-			return
-		default:
 		}
 		latencies := producer.StopMeasuringLatencies()
 		logger.Info("Returning latencies")

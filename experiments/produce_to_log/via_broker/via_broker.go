@@ -1,12 +1,13 @@
 package main
 
 import (
-	"crypto/rand"
+	cryptorand "crypto/rand"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"math"
+	mathrand "math/rand"
 	"os"
 	"slices"
 	"strconv"
@@ -21,6 +22,10 @@ import (
 const measurementPeriod = 10 * time.Second
 const basePartitionName = "partition"
 const maxOutstandingAsync uint32 = 524288
+const numPossiblePayloads = 1000
+
+var possiblePayloads [][]byte = make([][]byte, numPossiblePayloads)
+var experimentDuration time.Duration
 
 type stringSlice []string
 type intSlice []int
@@ -35,8 +40,6 @@ var cFlag = flag.Bool("c", false, "send messages synchronously")
 var eFlag = flag.Int("e", 60, "experiment and warmup duration")
 var sFlag = flag.String("s", "localhost:8080", "server address")
 var bFlag = flag.Bool("b", false, "create the server")
-
-var experimentDuration time.Duration
 
 func (n *stringSlice) String() string {
 	return fmt.Sprintf("%v", []string(*n))
@@ -108,6 +111,18 @@ func main() {
 	// 	defer server.Close()
 	// }
 	for _, messageSize := range messageSizes {
+		for i := range numPossiblePayloads {
+			payload := make([]byte, messageSize)
+			n, err := cryptorand.Read(payload)
+			if n != messageSize {
+				logger.Error("Failed to create possible message",
+					zap.Int("bytesPerMessage", messageSize),
+					zap.Error(err),
+				)
+				return
+			}
+			possiblePayloads[i] = payload
+		}
 		for _, messages := range messagesPerSecondFlag {
 			for _, partitions := range partitionsFlag {
 				for _, batchSize := range batchSizes {
@@ -200,11 +215,11 @@ func oneRun(partitions int, connections int, messageSize int, maxBatchSize int, 
 	for i := range numProducers {
 		partitionName := partitionNames[i%partitions]
 		c := clients[i%connections]
-		go oneClient(partitionName, messageSize, maxBatchSize, float64(messages)/float64(numProducers), c, logger, returnChans[i])
+		go oneClient(partitionName, maxBatchSize, float64(messages)/float64(numProducers), c, logger, returnChans[i])
 	}
 	numMeasurements := int(experimentDuration.Seconds() / measurementPeriod.Seconds())
-	aggregatedMessagesPerSecond := make([]float64, numMeasurements*2)
-	aggregatedBytesPerSecond := make([]float64, numMeasurements*2)
+	aggregatedMessagesPerSecond := make([]float64, numMeasurements)
+	aggregatedBytesPerSecond := make([]float64, numMeasurements)
 	latencies := make([]time.Duration, 0)
 	for _, r := range returnChans {
 		clientResult, ok := <-r
@@ -215,9 +230,9 @@ func oneRun(partitions int, connections int, messageSize int, maxBatchSize int, 
 		if len(clientResult.MessagesPerSecondMeasurements) != numMeasurements*2 {
 			return nil, fmt.Errorf("client returned %d measurements but expected %d", len(clientResult.MessagesPerSecondMeasurements), numMeasurements*2)
 		}
-		for i := range numMeasurements * 2 {
-			aggregatedMessagesPerSecond[i] += clientResult.MessagesPerSecondMeasurements[i]
-			aggregatedBytesPerSecond[i] += clientResult.MessagesPerSecondMeasurements[i] * float64(messageSize)
+		for i := range numMeasurements {
+			aggregatedMessagesPerSecond[i] += clientResult.MessagesPerSecondMeasurements[numMeasurements+i]
+			aggregatedBytesPerSecond[i] += clientResult.MessagesPerSecondMeasurements[numMeasurements+i] * float64(messageSize)
 		}
 		latencies = append(latencies, clientResult.LatencyMeasurements...)
 	}
@@ -280,9 +295,7 @@ func createClient(name string) (*client.Client, error) {
 	return c, err
 }
 
-func oneClient(partitionName string, messageSize int, maxBatchSize int, messages float64, c *client.Client, logger *zap.Logger, messagesSent chan<- clientResult) {
-	payload := make([]byte, messageSize)
-	rand.Read(payload)
+func oneClient(partitionName string, maxBatchSize int, messages float64, c *client.Client, logger *zap.Logger, messagesSent chan<- clientResult) {
 	producer, err := c.NewProducer(partitionName, false)
 	if err != nil {
 		logger.Error("Error creating producer", zap.Error(err))
@@ -304,7 +317,7 @@ experiment:
 	for {
 		select {
 		case <-experimentScheduler:
-			err := producer.AddMessage(payload)
+			err := producer.AddMessage(possiblePayloads[mathrand.Intn(numPossiblePayloads)])
 			if err != nil {
 				logger.Error("Error adding message", zap.Error(err))
 				close(messagesSent)

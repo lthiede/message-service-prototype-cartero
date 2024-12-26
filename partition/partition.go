@@ -77,16 +77,32 @@ func (p *Partition) logInteractions() {
 	p.logger.Info("Start handling produce", zap.String("partitionName", p.Name))
 	var lsnAfterLastPolledCommittedLSN uint64
 	var lsnAfterMostRecentLSN uint64
+	passNewCommittedDuration := make([]time.Duration, 0)
+	passOutstandingDuration := make([]time.Duration, 0)
+	getAppendBatchRequestDuration := make([]time.Duration, 0)
+	getPollCommittedRequestDuration := make([]time.Duration, 0)
+	pollCommittedDuration := make([]time.Duration, 0)
+	appendBatchDuration := make([]time.Duration, 0)
 	checkScheduled := false
 	for {
+		startLogInteractionRequest := time.Now()
 		lir, ok := <-p.LogInteractionRequests
 		if !ok {
 			p.logger.Info("Stop handling produce", zap.String("partitionName", p.Name))
 			close(p.newCommittedLSN)
 			close(p.outstandingAcks)
+			p.logger.Info("Measured durations",
+				zap.Float64("getAppendBatchRequestDuration50Pct", pct(getAppendBatchRequestDuration, 0.5)),
+				zap.Float64("getPollCommittedRequestDuration50Pct", pct(getPollCommittedRequestDuration, 0.5)),
+				zap.Float64("passNewCommittedDuration50pct", pct(passNewCommittedDuration, 0.5)),
+				zap.Float64("passOutstandingDuration50pct", pct(passOutstandingDuration, 0.5)),
+				zap.Float64("pollCommittedDuration50pct", pct(pollCommittedDuration, 0.5)),
+				zap.Float64("appendBatchDuration50pct", pct(appendBatchDuration, 0.5)),
+			)
 			return
 		}
 		if abr := lir.AppendBatchRequest; abr != nil {
+			getAppendBatchRequestDuration = append(getAppendBatchRequestDuration, time.Since(startLogInteractionRequest))
 			numMessages := uint32(len(abr.EndOffsetsExclusively))
 			p.outstandingAcks <- &outstandingAck{
 				ack: &pb.ProduceAck{
@@ -112,6 +128,7 @@ func (p *Partition) logInteractions() {
 				lsnAfterLastPolledCommittedLSN = lsnAfterCommittedLSN
 			}
 		} else if lir.pollCommittedRequest != nil {
+			getPollCommittedRequestDuration = append(getPollCommittedRequestDuration, time.Since(startLogInteractionRequest))
 			checkScheduled = false
 			committedLSN, err := p.logClient.PollCompletion()
 			if err != nil {
@@ -135,7 +152,6 @@ func (p *Partition) sendPollCommittedRequest() {
 			p.logger.Error("Caught error", zap.Any("err", err))
 		}
 	}()
-	time.Sleep(50 * time.Microsecond)
 	p.LogInteractionRequests <- LogInteractionRequest{
 		pollCommittedRequest: &struct{}{},
 	}

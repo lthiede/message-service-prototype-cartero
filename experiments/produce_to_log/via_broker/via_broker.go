@@ -191,7 +191,7 @@ func oneRun(partitions int, connections int, messageSize int, maxBatchSize int, 
 	}
 	clients := make([]*client.Client, connections)
 	for i := range connections {
-		c, err := createClient(fmt.Sprintf("client_%d_%d_%d_%d_%d", partitions, connections, messageSize, maxBatchSize, messages))
+		c, err := createClient(fmt.Sprintf("client_%d_%d_%d_%d_%d_%d", i, partitions, connections, messageSize, maxBatchSize, messages))
 		if err != nil {
 			return nil, fmt.Errorf("error creating client: %v", err)
 		}

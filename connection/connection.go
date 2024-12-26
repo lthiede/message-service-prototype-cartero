@@ -257,6 +257,7 @@ func (c *Connection) handleResponses() {
 
 func (c *Connection) Close() error {
 	c.logger.Info("Closing connection", zap.String("name", c.name))
+	close(c.responses)
 	for _, pc := range c.partitionConsumers {
 		return pc.Close()
 	}

@@ -33,12 +33,23 @@ func (c *Client) CreatePartition(partitionName string, numPartitions uint32) err
 	if err != nil {
 		return fmt.Errorf("failed to marshal create partition request, partition %s: %v", partitionName, err)
 	}
-	c.connWriteMutex.Lock()
-	_, err = c.conn.Write(wireMessage.Bytes())
-	if err != nil {
-		return fmt.Errorf("failed to send create partition request, partition %s: %v", partitionName, err)
+	request := wireMessage.Bytes()
+	sentSuccessfully := false
+	for !sentSuccessfully {
+		c.epochMutex.RLock()
+		err := c.sendBytesOverNetwork(request)
+		potentialFailureEpoch := c.epoch
+		c.epochMutex.RUnlock()
+		if err != nil {
+			c.logger.Error("Failed to send delete partition request", zap.Error(err))
+			err := c.restoreConnection(potentialFailureEpoch)
+			if err != nil {
+				return fmt.Errorf("failed to recover from network failure: %v", err)
+			}
+		} else {
+			sentSuccessfully = true
+		}
 	}
-	c.connWriteMutex.Unlock()
 	successful := <-successChan
 	if !successful {
 		return fmt.Errorf("creating partition %s failed on the server side", partitionName)
@@ -72,12 +83,23 @@ func (c *Client) DeletePartition(partitionName string, numPartitions uint32) err
 	if err != nil {
 		return fmt.Errorf("failed to marshal delete partition request, partition %s: %v", partitionName, err)
 	}
-	c.connWriteMutex.Lock()
-	_, err = c.conn.Write(wireMessage.Bytes())
-	if err != nil {
-		return fmt.Errorf("failed to send delete partition request, partition %s: %v", partitionName, err)
+	request := wireMessage.Bytes()
+	sentSuccessfully := false
+	for !sentSuccessfully {
+		c.epochMutex.RLock()
+		err := c.sendBytesOverNetwork(request)
+		potentialFailureEpoch := c.epoch
+		c.epochMutex.RUnlock()
+		if err != nil {
+			c.logger.Error("Failed to send delete partition request", zap.Error(err))
+			err := c.restoreConnection(potentialFailureEpoch)
+			if err != nil {
+				return fmt.Errorf("failed to recover from network failure: %v", err)
+			}
+		} else {
+			sentSuccessfully = true
+		}
 	}
-	c.connWriteMutex.Unlock()
 	successful := <-successChan
 	if !successful {
 		return fmt.Errorf("deleting partition %s failed on the server side", partitionName)

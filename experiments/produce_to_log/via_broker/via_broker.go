@@ -7,7 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"math"
-	mathrand "math/rand"
+	mathrand "math/rand/v2"
 	"os"
 	"slices"
 	"strconv"
@@ -317,7 +317,7 @@ experiment:
 	for {
 		select {
 		case <-experimentScheduler:
-			err := producer.AddMessage(possiblePayloads[mathrand.Intn(numPossiblePayloads)])
+			err := producer.AddMessage(possiblePayloads[mathrand.IntN(numPossiblePayloads)])
 			if err != nil {
 				logger.Error("Error adding message", zap.Error(err))
 			}
@@ -326,8 +326,6 @@ experiment:
 		case producerErr := <-producer.AsyncError:
 			err := producerErr.Err
 			logger.Error("Async error in producer", zap.Error(err))
-			close(messagesSent)
-			return
 		}
 	}
 	r, ok := <-measurements

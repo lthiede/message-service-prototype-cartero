@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"math/rand"
+	"math/rand/v2"
 	"net"
+	"time"
 
 	"github.com/lthiede/cartero/consume"
 	"github.com/lthiede/cartero/partition"
@@ -67,8 +68,21 @@ func New(conn net.Conn, partitionManager *partitionmanager.PartitionManager, log
 	return c, nil
 }
 
+const failureProbPerMinute = 0.03125
+
 func (c *Connection) handleRequests() {
+	start := time.Now()
+	minutes := 0
 	for {
+		passed := time.Since(start)
+		if int(passed.Minutes()) > minutes {
+			if rand.Float64() <= failureProbPerMinute {
+				c.logger.Error("Random simulated failure")
+				c.Close()
+				return
+			}
+			minutes++
+		}
 		request := &pb.Request{}
 		err := protodelim.UnmarshalFrom(&readertobytereader.ReaderByteReader{Reader: c.conn}, request)
 		if err != nil {
@@ -257,6 +271,7 @@ func (c *Connection) handleResponses() {
 
 func (c *Connection) Close() error {
 	c.logger.Info("Closing connection", zap.String("name", c.name))
+	c.conn.Close()
 	close(c.responses)
 	for _, pc := range c.partitionConsumers {
 		return pc.Close()

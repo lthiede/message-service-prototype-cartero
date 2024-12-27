@@ -1,6 +1,7 @@
 package client
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -14,8 +15,12 @@ import (
 
 type Client struct {
 	logger                          *zap.Logger
+	address                         string
 	conn                            net.Conn
 	connWriteMutex                  sync.Mutex
+	epoch                           uint64
+	epochMutex                      sync.RWMutex
+	failed                          bool
 	producers                       map[string]*Producer
 	producersRWMutex                sync.RWMutex
 	consumers                       map[string]*Consumer
@@ -28,18 +33,7 @@ type Client struct {
 }
 
 func New(address string, logger *zap.Logger) (*Client, error) {
-	return NewWithOptions(address, "" /*localAddr*/, logger)
-}
-
-func NewWithOptions(address string, localAddr string, logger *zap.Logger) (*Client, error) {
 	dialer := &net.Dialer{}
-	if localAddr != "" {
-		dialer.LocalAddr = &net.TCPAddr{
-			IP:   net.ParseIP(localAddr),
-			Port: 0,
-		}
-		logger.Info("Using local address", zap.String("localAddress", localAddr))
-	}
 	conn, err := dialer.Dial("tcp", address)
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial server: %v", err)
@@ -47,6 +41,7 @@ func NewWithOptions(address string, localAddr string, logger *zap.Logger) (*Clie
 	logger.Info("Dialed server", zap.String("address", address))
 	client := &Client{
 		logger:                     logger,
+		address:                    address,
 		conn:                       conn,
 		producers:                  map[string]*Producer{},
 		consumers:                  map[string]*Consumer{},
@@ -66,10 +61,24 @@ func (c *Client) handleResponses() {
 			return
 		default:
 			response := &pb.Response{}
+			c.epochMutex.RLock()
+			potentialFailureEpoch := c.epoch
 			err := protodelim.UnmarshalFrom(&readertobytereader.ReaderByteReader{Reader: c.conn}, response)
+			c.epochMutex.RUnlock()
 			if err != nil {
 				c.logger.Error("Failed to unmarshal response", zap.Error(err))
-				return
+				select {
+				case <-c.done:
+					c.logger.Info("Stop handling responses")
+					return
+				default:
+					err := c.restoreConnection(potentialFailureEpoch)
+					if err != nil {
+						c.logger.Error("Failed to restore connection", zap.Error(err))
+						return
+					}
+					continue
+				}
 			}
 			switch res := response.Response.(type) {
 			case *pb.Response_ProduceAck:
@@ -121,8 +130,54 @@ func (c *Client) handleResponses() {
 	}
 }
 
+func (c *Client) sendBytesOverNetwork(request []byte) error {
+	c.connWriteMutex.Lock()
+	defer c.connWriteMutex.Unlock()
+	_, err := c.conn.Write(request)
+	if err != nil {
+		return fmt.Errorf("failed to send bytes over network: %v", err)
+	}
+	return nil
+}
+
+func (c *Client) restoreConnection(failureEpoch uint64) error {
+	c.epochMutex.Lock()
+	defer c.epochMutex.Unlock()
+	c.connWriteMutex.Lock()
+	defer c.connWriteMutex.Unlock()
+	if failureEpoch < c.epoch {
+		return nil
+	}
+	c.logger.Info("Trying to restore connection")
+	if c.failed {
+		return errors.New("restoring connection already failed")
+	}
+	dialer := &net.Dialer{}
+	conn, err := dialer.Dial("tcp", c.address)
+	if err != nil {
+		c.failed = true
+		return fmt.Errorf("failed restoring connection: %v", err)
+	}
+	c.epoch++
+	c.conn = conn
+	return nil
+}
+
 func (c *Client) Close() error {
 	c.logger.Info("Closing client")
+	close(c.done)
+	for _, producer := range c.producers {
+		err := producer.Close()
+		if err != nil {
+			return fmt.Errorf("failed to close producer: %v", err)
+		}
+	}
+	for _, consumer := range c.consumers {
+		err := consumer.Close()
+		if err != nil {
+			return fmt.Errorf("failed to close producer: %v", err)
+		}
+	}
 	moreImportantErr := c.conn.Close()
 	if moreImportantErr != nil {
 		c.logger.Error("Failed to close connection", zap.Error(moreImportantErr))

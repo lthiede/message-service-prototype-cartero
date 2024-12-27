@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -42,8 +43,13 @@ type Producer struct {
 	measureLatencies  atomic.Bool
 	waiting           atomic.Bool
 	waitingForBatchId uint64
-	sendTimes         []time.Time
-	ackTimes          []time.Time
+	sendTimes         []latencyMeasurement
+	ackTimes          []latencyMeasurement
+}
+
+type latencyMeasurement struct {
+	batchId uint64
+	t       time.Time
 }
 
 type ProducerError struct {
@@ -89,6 +95,9 @@ func (p *Producer) AddMessage(message []byte) error {
 func (p *Producer) sendSingleMessage(message []byte) error {
 	p.lock.Lock()
 	defer p.lock.Unlock()
+	if p.dead {
+		return errors.New("Send on dead producer")
+	}
 	if len(p.endOffsetsExclusively) != 0 || len(p.messages) != 0 {
 		return errors.New("turned of batching, while there is still a waiting batch")
 	}
@@ -104,6 +113,9 @@ func (p *Producer) sendSingleMessage(message []byte) error {
 func (p *Producer) addMessageToBatch(message []byte) error {
 	p.lock.Lock()
 	defer p.lock.Unlock()
+	if p.dead {
+		return errors.New("Send on dead producer")
+	}
 	var oldPayloadSize uint32
 	if len(p.endOffsetsExclusively) > 0 {
 		oldPayloadSize = p.endOffsetsExclusively[len(p.endOffsetsExclusively)-1]
@@ -163,6 +175,7 @@ func (p *Producer) sendBatch() error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal batch: %v", err)
 	}
+	header := wireMessage.Bytes()
 	var timeWaited time.Duration
 	for p.numMessagesSend >= p.numMessagesAck.Load()+uint64(p.MaxOutstanding) {
 		time.Sleep(100 * time.Microsecond)
@@ -171,28 +184,22 @@ func (p *Producer) sendBatch() error {
 			return errors.New("Timed out waiting for enough acks")
 		}
 	}
-	p.client.connWriteMutex.Lock()
-	if p.measureLatencies.Load() && !p.waiting.Load() {
-		p.waitingForBatchId = p.batchId
-		p.waiting.Store(true)
-		p.sendTimes = append(p.sendTimes, time.Now())
-	}
-	header := wireMessage.Bytes()
-	_, err = p.client.conn.Write(header)
-	if err != nil {
-		return fmt.Errorf("failed to send produce request over wire: %v", err)
-	} else {
-		// p.client.logger.Info("Sent produce proto header", zap.Int("numBytes", len(header)), zap.Int("numMessages", len(p.messages)))
-	}
-	for _, message := range p.messages {
-		_, err = p.client.conn.Write(message)
+	sentSuccessfully := false
+	for !sentSuccessfully {
+		p.client.epochMutex.RLock()
+		potentialFailureEpoch := p.client.epoch
+		err := p.sendBytesOverNetwork(header)
+		p.client.epochMutex.RUnlock()
 		if err != nil {
-			return fmt.Errorf("Failed to send produce payload over wire: %v", err)
+			p.client.logger.Error("Failed to send produce request or payload", zap.Error(err))
+			err := p.client.restoreConnection(potentialFailureEpoch)
+			if err != nil {
+				return fmt.Errorf("failed to recover from network failure: %v", err)
+			}
 		} else {
-			// p.client.logger.Info("Sent actual message bytes", zap.Int("numBytes", len(message)))
+			sentSuccessfully = true
 		}
 	}
-	p.client.connWriteMutex.Unlock()
 	p.batchId++
 	p.numMessagesSend += uint64(len(p.messages))
 	p.endOffsetsExclusively = nil
@@ -200,19 +207,63 @@ func (p *Producer) sendBatch() error {
 	return nil
 }
 
+func (p *Producer) sendBytesOverNetwork(header []byte) error {
+	p.client.connWriteMutex.Lock()
+	defer p.client.connWriteMutex.Unlock()
+	if p.measureLatencies.Load() && !p.waiting.Load() {
+		p.waitingForBatchId = p.batchId
+		p.waiting.Store(true)
+		p.sendTimes = append(p.sendTimes, latencyMeasurement{
+			batchId: p.batchId,
+			t:       time.Now(),
+		})
+	}
+	_, err := p.client.conn.Write(header)
+	if err != nil {
+		return fmt.Errorf("failed to send produce request over wire: %v", err)
+	}
+	for _, message := range p.messages {
+		_, err = p.client.conn.Write(message)
+		if err != nil {
+			return fmt.Errorf("failed to send produce payload over wire: %v", err)
+		}
+	}
+	return nil
+}
+
+func (p *Producer) restoreConnection() error {
+	// c.connWriteMutex.Lock() assume already locked
+	if p.client.failed {
+		return errors.New("restoring connection already failed")
+	}
+	dialer := &net.Dialer{}
+	conn, err := dialer.Dial("tcp", p.client.address)
+	if err != nil {
+		p.client.failed = true
+		return fmt.Errorf("failed restoring connection: %v", err)
+	}
+	p.client.conn = conn
+	return nil
+}
+
 func (p *Producer) UpdateAcknowledged(ack *pb.ProduceAck) {
 	expectedBatchId := p.batchIdUnacknowledged.Load()
 	if expectedBatchId != ack.BatchId {
 		p.AsyncError <- ProducerError{
-			Err: fmt.Errorf("Received wrong ack. expected %d, got %d", expectedBatchId, ack.BatchId),
+			Err: fmt.Errorf("Received wrong ack. expected %d, got %d. Probably lost the messages in between", expectedBatchId, ack.BatchId),
 		}
 	}
-	measure := p.measureLatencies.Load()
-	waiting := p.waiting.Load()
-	waitingFor := p.waitingForBatchId
-	if measure && waiting && waitingFor == ack.BatchId {
-		p.ackTimes = append(p.ackTimes, time.Now())
-		p.waiting.Store(false)
+	if p.measureLatencies.Load() && p.waiting.Load() {
+		if ack.BatchId == p.waitingForBatchId {
+			p.ackTimes = append(p.ackTimes, latencyMeasurement{
+				batchId: ack.BatchId,
+				t:       time.Now(),
+			})
+			p.waiting.Store(false)
+		} else if ack.BatchId > p.waitingForBatchId {
+			// lost the message we're waiting for
+			p.waiting.Store(false)
+		}
 	}
 	p.batchIdUnacknowledged.Store(ack.BatchId + 1)
 	p.lastLSNPlus1.Store(ack.StartLsn + uint64(ack.NumMessages))
@@ -239,8 +290,14 @@ func (p *Producer) StartMeasuringLatencies() {
 func (p *Producer) StopMeasuringLatencies() []time.Duration {
 	p.measureLatencies.Store(false)
 	latencies := make([]time.Duration, len(p.ackTimes))
-	for i, ackTime := range p.ackTimes {
-		latencies[i] = ackTime.Sub(p.sendTimes[i])
+	sendTimesIndex := 0
+	for ackTimesIndex, ack := range p.ackTimes {
+		send := p.sendTimes[sendTimesIndex]
+		for send.batchId != ack.batchId {
+			sendTimesIndex++
+			send = p.sendTimes[sendTimesIndex]
+		}
+		latencies[ackTimesIndex] = ack.t.Sub(send.t)
 	}
 	return latencies
 }

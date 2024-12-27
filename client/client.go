@@ -87,6 +87,7 @@ func (c *Client) handleResponses() {
 				p, ok := c.producers[produceAck.PartitionName]
 				if !ok {
 					c.logger.Error("Partition not recognized", zap.String("partitionName", produceAck.PartitionName))
+					c.producersRWMutex.RUnlock()
 					continue
 				}
 				p.UpdateAcknowledged(produceAck)
@@ -97,6 +98,7 @@ func (c *Client) handleResponses() {
 				cons, ok := c.consumers[consumeRes.PartitionName]
 				if !ok {
 					c.logger.Error("Partition not recognized", zap.String("partitionName", consumeRes.PartitionName))
+					c.consumersRWMutex.RUnlock()
 					continue
 				}
 				// c.logger.Info("Client received safe consume offset", zap.String("partitionName", consumeRes.PartitionName), zap.Int("endOfSafeLSNsExclusively", int(consumeRes.EndOfSafeLsnsExclusively)))

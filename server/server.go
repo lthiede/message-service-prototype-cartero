@@ -50,11 +50,10 @@ func (s *Server) acceptConnections() {
 				continue
 			}
 			s.logger.Info("Accepted new connection")
-			conn, err := connection.New(c, s.partitionManager, s.logger)
+			_, err = connection.New(c, s.partitionManager, s.logger)
 			if err != nil {
 				s.logger.Error("Failed to start handling new connection", zap.Error(err))
 			}
-			defer conn.Close()
 		}
 	}
 }

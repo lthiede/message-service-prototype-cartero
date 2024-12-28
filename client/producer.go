@@ -160,6 +160,7 @@ func (p *Producer) scheduleSend(epoch int) {
 }
 
 func (p *Producer) sendBatch() error {
+	p.client.logger.Info("Sending batch", zap.String("paritionName", p.partitionName))
 	req := &pb.Request{
 		Request: &pb.Request_ProduceRequest{
 			ProduceRequest: &pb.ProduceRequest{

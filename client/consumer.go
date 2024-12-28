@@ -61,7 +61,7 @@ func (client *Client) NewConsumer(partitionName string, startLSN uint64) (*Consu
 		consumer.client.epochMutex.RUnlock()
 		if err != nil {
 			client.logger.Error("Failed to send consume request", zap.Error(err))
-			err := client.restoreConnection(potentialFailureEpoch, "consumer")
+			err := client.restoreConnection(potentialFailureEpoch)
 			if err != nil {
 				return nil, fmt.Errorf("failed to recover from network failure: %v", err)
 			}

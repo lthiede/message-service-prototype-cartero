@@ -42,7 +42,7 @@ func (c *Client) CreatePartition(partitionName string, numPartitions uint32) err
 		c.epochMutex.RUnlock()
 		if err != nil {
 			c.logger.Error("Failed to send delete partition request", zap.Error(err))
-			err := c.restoreConnection(potentialFailureEpoch)
+			err := c.restoreConnection(potentialFailureEpoch, "partitions")
 			if err != nil {
 				return fmt.Errorf("failed to recover from network failure: %v", err)
 			}
@@ -92,7 +92,7 @@ func (c *Client) DeletePartition(partitionName string, numPartitions uint32) err
 		c.epochMutex.RUnlock()
 		if err != nil {
 			c.logger.Error("Failed to send delete partition request", zap.Error(err))
-			err := c.restoreConnection(potentialFailureEpoch)
+			err := c.restoreConnection(potentialFailureEpoch, "partitions")
 			if err != nil {
 				return fmt.Errorf("failed to recover from network failure: %v", err)
 			}

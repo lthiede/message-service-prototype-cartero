@@ -72,7 +72,7 @@ func (c *Client) handleResponses() {
 					c.logger.Info("Stop handling responses")
 					return
 				default:
-					err := c.restoreConnection(potentialFailureEpoch)
+					err := c.restoreConnection(potentialFailureEpoch, "client")
 					if err != nil {
 						c.logger.Error("Failed to restore connection", zap.Error(err))
 						return
@@ -142,13 +142,13 @@ func (c *Client) sendBytesOverNetwork(request []byte) error {
 	return nil
 }
 
-func (c *Client) restoreConnection(failureEpoch uint64) error {
+func (c *Client) restoreConnection(failureEpoch uint64, calledFrom string) error {
 	c.epochMutex.Lock()
 	defer c.epochMutex.Unlock()
-	c.logger.Info("Got epoch mutex")
+	c.logger.Info("Got epoch mutex", zap.String("calledFrom", calledFrom))
 	c.connWriteMutex.Lock()
 	defer c.connWriteMutex.Unlock()
-	c.logger.Info("Got conn mutex")
+	c.logger.Info("Got conn mutex", zap.String("calledFrom", calledFrom))
 	if failureEpoch < c.epoch {
 		c.logger.Info("Don't need to restore due to epoch")
 		return nil

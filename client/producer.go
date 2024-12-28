@@ -191,7 +191,7 @@ func (p *Producer) sendBatch() error {
 		p.client.epochMutex.RUnlock()
 		if err != nil {
 			p.client.logger.Error("Failed to send produce request or payload", zap.Error(err))
-			err := p.client.restoreConnection(potentialFailureEpoch)
+			err := p.client.restoreConnection(potentialFailureEpoch, "producer")
 			if err != nil {
 				return fmt.Errorf("failed to recover from network failure: %v", err)
 			}

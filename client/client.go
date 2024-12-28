@@ -62,9 +62,11 @@ func (c *Client) handleResponses() {
 		default:
 			response := &pb.Response{}
 			c.epochMutex.RLock()
+			c.logger.Info("Locked epoch mutex")
 			potentialFailureEpoch := c.epoch
 			err := protodelim.UnmarshalFrom(&readertobytereader.ReaderByteReader{Reader: c.conn}, response)
 			c.epochMutex.RUnlock()
+			c.logger.Info("Unlocked epoch mutex")
 			if err != nil {
 				c.logger.Error("Failed to unmarshal response", zap.Error(err))
 				select {
@@ -143,14 +145,16 @@ func (c *Client) sendBytesOverNetwork(request []byte) error {
 }
 
 func (c *Client) restoreConnection(failureEpoch uint64, calledFrom string) error {
+	c.logger.Info("Trying to get epoch mutex", zap.String("calledFrom", calledFrom))
 	c.epochMutex.Lock()
-	defer c.epochMutex.Unlock()
+	defer func() {
+		c.logger.Info("Unlocked epoch mutex", zap.String("calledFrom", calledFrom))
+		c.epochMutex.Unlock()
+	}()
 	c.logger.Info("Got epoch mutex", zap.String("calledFrom", calledFrom))
 	c.connWriteMutex.Lock()
 	defer c.connWriteMutex.Unlock()
-	c.logger.Info("Got conn mutex", zap.String("calledFrom", calledFrom))
 	if failureEpoch < c.epoch {
-		c.logger.Info("Don't need to restore due to epoch")
 		return nil
 	}
 	c.logger.Info("Trying to restore connection")

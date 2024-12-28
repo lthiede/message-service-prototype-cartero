@@ -335,7 +335,7 @@ experiment:
 		close(messagesSent)
 		return
 	}
-	logger.Info("Received measurements")
+	logger.Info("Received measurements", zap.String("partitionName", partitionName))
 	producer.Close()
 	messagesSent <- r
 }

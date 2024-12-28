@@ -322,6 +322,7 @@ experiment:
 				logger.Error("Error adding message", zap.Error(err))
 			}
 		case <-quitExperiment:
+			logger.Info("Finished experiment")
 			break experiment
 		case producerErr := <-producer.AsyncError:
 			err := producerErr.Err
@@ -334,6 +335,7 @@ experiment:
 		close(messagesSent)
 		return
 	}
+	logger.Info("Received measurements")
 	producer.Close()
 	messagesSent <- r
 }

@@ -168,6 +168,7 @@ func (c *Client) restoreConnection(failureEpoch uint64) error {
 }
 
 func (c *Client) Close() error {
+	// this could lead to weird interactions if producers are still alive
 	c.logger.Info("Closing client")
 	close(c.done)
 	for _, producer := range c.producers {

@@ -221,12 +221,12 @@ func oneRun(partitions int, connections int, messageSize int, maxBatchSize int, 
 	aggregatedMessagesPerSecond := make([]float64, numMeasurements)
 	aggregatedBytesPerSecond := make([]float64, numMeasurements)
 	latencies := make([]time.Duration, 0)
-	for _, r := range returnChans {
+	for i, r := range returnChans {
 		clientResult, ok := <-r
 		if !ok {
 			return nil, errors.New("one client wasn't successful")
 		}
-		logger.Info("Received client result")
+		logger.Info("Received client result", zap.Int("clientNumber", i))
 		if len(clientResult.MessagesPerSecondMeasurements) != numMeasurements*2 {
 			return nil, fmt.Errorf("client returned %d measurements but expected %d", len(clientResult.MessagesPerSecondMeasurements), numMeasurements*2)
 		}

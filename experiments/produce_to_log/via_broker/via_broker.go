@@ -235,8 +235,7 @@ func oneRun(partitions int, connections int, messageSize int, maxBatchSize int, 
 		}
 		latencies = append(latencies, clientResult.LatencyMeasurements...)
 	}
-	for i, c := range clients {
-		logger.Info("Closing client", zap.Int("clientNum", i))
+	for _, c := range clients {
 		c.Close()
 	}
 	err = setupClient.DeletePartition(oneRunTopicName, uint32(partitions))
@@ -302,7 +301,6 @@ func oneClient(partitionName string, maxBatchSize int, messages float64, c *clie
 		close(messagesSent)
 		return
 	}
-	defer producer.Close()
 	producer.MaxBatchSize = uint32(maxBatchSize)
 	producer.MaxPublishDelay = 0 // turns off publishing on a timer
 	if *cFlag {
@@ -334,6 +332,7 @@ experiment:
 		close(messagesSent)
 		return
 	}
+	producer.Close()
 	messagesSent <- r
 }
 

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"net"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -228,21 +227,6 @@ func (p *Producer) sendBytesOverNetwork(header []byte) error {
 			return fmt.Errorf("failed to send produce payload over wire: %v", err)
 		}
 	}
-	return nil
-}
-
-func (p *Producer) restoreConnection() error {
-	// c.connWriteMutex.Lock() assume already locked
-	if p.client.failed {
-		return errors.New("restoring connection already failed")
-	}
-	dialer := &net.Dialer{}
-	conn, err := dialer.Dial("tcp", p.client.address)
-	if err != nil {
-		p.client.failed = true
-		return fmt.Errorf("failed restoring connection: %v", err)
-	}
-	p.client.conn = conn
 	return nil
 }
 

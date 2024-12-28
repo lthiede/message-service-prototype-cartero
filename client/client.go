@@ -148,6 +148,7 @@ func (c *Client) restoreConnection(failureEpoch uint64) error {
 	c.connWriteMutex.Lock()
 	defer c.connWriteMutex.Unlock()
 	if failureEpoch < c.epoch {
+		c.logger.Info("Don't need to restore due to epoch")
 		return nil
 	}
 	c.logger.Info("Trying to restore connection")
@@ -160,6 +161,7 @@ func (c *Client) restoreConnection(failureEpoch uint64) error {
 		c.failed = true
 		return fmt.Errorf("failed restoring connection: %v", err)
 	}
+	c.logger.Info("Restored connection")
 	c.epoch++
 	c.conn = conn
 	return nil

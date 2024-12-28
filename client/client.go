@@ -145,8 +145,10 @@ func (c *Client) sendBytesOverNetwork(request []byte) error {
 func (c *Client) restoreConnection(failureEpoch uint64) error {
 	c.epochMutex.Lock()
 	defer c.epochMutex.Unlock()
+	c.logger.Info("Got epoch mutex")
 	c.connWriteMutex.Lock()
 	defer c.connWriteMutex.Unlock()
+	c.logger.Info("Got conn mutex")
 	if failureEpoch < c.epoch {
 		c.logger.Info("Don't need to restore due to epoch")
 		return nil

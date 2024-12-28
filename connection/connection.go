@@ -75,7 +75,7 @@ func (c *Connection) handleRequests() {
 	minutes := 0
 	for {
 		passed := time.Since(start)
-		if int(passed.Minutes()*2) > minutes {
+		if int(passed.Minutes()*6) > minutes {
 			if rand.Float64() <= failureProbPerMinute {
 				c.logger.Error("Random simulated failure")
 				c.Close()

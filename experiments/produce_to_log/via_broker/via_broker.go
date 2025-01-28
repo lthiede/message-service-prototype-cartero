@@ -297,7 +297,13 @@ func createClient(name string) (*client.Client, error) {
 }
 
 func oneClient(partitionName string, maxBatchSize int, messages float64, c *client.Client, logger *zap.Logger, messagesSent chan<- clientResult) {
-	producer, err := c.NewProducer(partitionName, false)
+	var maxOutstanding uint32
+	if *cFlag {
+		maxOutstanding = 1
+	} else {
+		maxOutstanding = maxOutstandingAsync
+	}
+	producer, err := c.NewProducer(partitionName, maxOutstanding)
 	if err != nil {
 		logger.Error("Error creating producer", zap.Error(err))
 		close(messagesSent)
@@ -305,11 +311,6 @@ func oneClient(partitionName string, maxBatchSize int, messages float64, c *clie
 	}
 	producer.MaxBatchSize = uint32(maxBatchSize)
 	producer.MaxPublishDelay = 0 // turns off publishing on a timer
-	if *cFlag {
-		producer.MaxOutstanding = 1
-	} else {
-		producer.MaxOutstanding = maxOutstandingAsync
-	}
 	logger.Info("Starting experiment")
 	experimentScheduler, quitExperiment := timer(time.Duration(2*int64(experimentDuration))+time.Second, messages)
 	measurements := measure(producer, logger)
@@ -404,7 +405,6 @@ func measure(producer *client.Producer, logger *zap.Logger) chan clientResult {
 			startNumMessages = endNumMessages
 		}
 		latencies := producer.StopMeasuringLatencies()
-		logger.Info("Returning latencies")
 		messagesSent <- clientResult{
 			MessagesPerSecondMeasurements: messagesPerSecondMeasurements,
 			LatencyMeasurements:           latencies,

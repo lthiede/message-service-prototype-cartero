@@ -25,19 +25,19 @@ type Producer struct {
 	// for configuration from outside
 	MaxPublishDelay time.Duration
 	MaxBatchSize    uint32
-	MaxOutstanding  uint32
+	maxOutstanding  uint32
 	// for sends due to max publish delay reached
 	epoch int
 	lock  sync.Mutex
 	dead  bool
-	// Stuff that updates with acks
-	batchIdUnacknowledged atomic.Uint64 // implicitly starts at 0
-	lastLSNPlus1          atomic.Uint64 // implicitly starts at 0
-	numMessagesAck        atomic.Uint64 // implicitly starts at 0
+	// Keeping track of outstanding and acks
+	lastLSNPlus1       atomic.Uint64
+	numMessagesAck     atomic.Uint64 // doesn't include lost messages or lost acks
+	numMessagesHandled atomic.Uint64 // includes lost messages or lost acks
+	numMessagesSend    uint64
+	outstandingBatches chan Batch
 	// used by acks and sends due to max publish delay reached
 	AsyncError chan ProducerError
-	// used to keep track of max outstanding
-	numMessagesSend uint64
 	// for measuring latencies
 	measureLatencies  atomic.Bool
 	waiting           atomic.Bool
@@ -52,8 +52,13 @@ type latencyMeasurement struct {
 }
 
 type ProducerError struct {
+	Batch *Batch
+	Err   error
+}
+
+type Batch struct {
 	Messages [][]byte
-	Err      error
+	BatchId  uint64
 }
 
 type ProducerAck struct {
@@ -61,20 +66,21 @@ type ProducerAck struct {
 	NumMessagesAck uint64
 }
 
-func (client *Client) NewProducer(partitionName string, ReturnAcksOnChan bool) (*Producer, error) {
+func (client *Client) NewProducer(partitionName string, maxOutstanding uint32) (*Producer, error) {
 	client.producersRWMutex.Lock()
 	p, ok := client.producers[partitionName]
 	if ok {
 		return p, nil
 	}
 	p = &Producer{
-		client:          client,
-		MaxPublishDelay: 1 * time.Millisecond,
-		MaxBatchSize:    524288,
-		MaxOutstanding:  1024,
-		partitionName:   partitionName,
-		messages:        make([][]byte, 0, 137),
-		AsyncError:      make(chan ProducerError),
+		client:             client,
+		MaxPublishDelay:    1 * time.Millisecond,
+		MaxBatchSize:       524288,
+		maxOutstanding:     maxOutstanding,
+		outstandingBatches: make(chan Batch, maxOutstanding),
+		partitionName:      partitionName,
+		messages:           make([][]byte, 0, 137),
+		AsyncError:         make(chan ProducerError),
 	}
 	client.producers[partitionName] = p
 	client.producersRWMutex.Unlock()
@@ -151,8 +157,8 @@ func (p *Producer) scheduleSend(epoch int) {
 			err := p.sendBatch()
 			if err != nil {
 				p.AsyncError <- ProducerError{
-					Messages: p.messages,
-					Err:      fmt.Errorf("failed to asynchronously send batch: %v", err),
+					Batch: nil,
+					Err:   fmt.Errorf("failed to asynchronously send batch: %v. batch is kept in producer", err),
 				}
 			}
 		}
@@ -175,8 +181,9 @@ func (p *Producer) sendBatch() error {
 		return fmt.Errorf("failed to marshal batch: %v", err)
 	}
 	header := wireMessage.Bytes()
+	p.numMessagesSend += uint64(len(p.messages))
 	var timeWaited time.Duration
-	for p.numMessagesSend >= p.numMessagesAck.Load()+uint64(p.MaxOutstanding) {
+	for p.numMessagesSend >= p.numMessagesHandled.Load()+uint64(p.maxOutstanding) {
 		time.Sleep(100 * time.Microsecond)
 		timeWaited += 100 * time.Microsecond
 		if timeWaited >= time.Second {
@@ -199,8 +206,11 @@ func (p *Producer) sendBatch() error {
 			sentSuccessfully = true
 		}
 	}
+	p.outstandingBatches <- Batch{
+		Messages: p.messages,
+		BatchId:  p.batchId,
+	}
 	p.batchId++
-	p.numMessagesSend += uint64(len(p.messages))
 	p.endOffsetsExclusively = nil
 	p.messages = nil
 	return nil
@@ -231,12 +241,18 @@ func (p *Producer) sendBytesOverNetwork(header []byte) error {
 }
 
 func (p *Producer) UpdateAcknowledged(ack *pb.ProduceAck) {
-	expectedBatchId := p.batchIdUnacknowledged.Load()
-	if expectedBatchId != ack.BatchId {
+	expectedBatch := <-p.outstandingBatches
+	numHandled := len(expectedBatch.Messages)
+	for expectedBatch.BatchId < ack.BatchId {
 		p.AsyncError <- ProducerError{
-			Err: fmt.Errorf("Received wrong ack. expected %d, got %d. Probably lost the messages in between", expectedBatchId, ack.BatchId),
+			Batch: &expectedBatch,
+			Err:   fmt.Errorf("Received wrong ack. expected %d, got %d. Probably lost the messages in between", expectedBatch.BatchId, ack.BatchId),
 		}
+		expectedBatch = <-p.outstandingBatches
+		numHandled += len(expectedBatch.Messages)
 	}
+	newNumHandled := p.numMessagesHandled.Load() + uint64(numHandled)
+	p.numMessagesHandled.Store(newNumHandled)
 	if p.measureLatencies.Load() && p.waiting.Load() {
 		if ack.BatchId == p.waitingForBatchId {
 			p.ackTimes = append(p.ackTimes, latencyMeasurement{
@@ -249,7 +265,6 @@ func (p *Producer) UpdateAcknowledged(ack *pb.ProduceAck) {
 			p.waiting.Store(false)
 		}
 	}
-	p.batchIdUnacknowledged.Store(ack.BatchId + 1)
 	p.lastLSNPlus1.Store(ack.StartLsn + uint64(ack.NumMessages))
 	newNumMessagesAck := p.numMessagesAck.Load() + uint64(ack.NumMessages)
 	p.numMessagesAck.Store(newNumMessagesAck)
@@ -257,10 +272,6 @@ func (p *Producer) UpdateAcknowledged(ack *pb.ProduceAck) {
 
 func (p *Producer) NumMessagesAck() uint64 {
 	return p.numMessagesAck.Load()
-}
-
-func (p *Producer) BatchIdAck() uint64 {
-	return p.batchIdUnacknowledged.Load() - 1
 }
 
 func (p *Producer) LastLSNPlus1() uint64 {

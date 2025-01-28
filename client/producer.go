@@ -33,8 +33,7 @@ type Producer struct {
 	// Keeping track of outstanding and acks
 	lastLSNPlus1       atomic.Uint64
 	numMessagesAck     atomic.Uint64 // doesn't include lost messages or lost acks
-	numMessagesHandled atomic.Uint64 // includes lost messages or lost acks
-	numMessagesSend    uint64
+	numBatchesHandled  atomic.Uint64 // includes lost messages or lost acks
 	outstandingBatches chan Batch
 	// used by acks and sends due to max publish delay reached
 	AsyncError chan ProducerError
@@ -181,13 +180,13 @@ func (p *Producer) sendBatch() error {
 		return fmt.Errorf("failed to marshal batch: %v", err)
 	}
 	header := wireMessage.Bytes()
-	p.numMessagesSend += uint64(len(p.messages))
 	var timeWaited time.Duration
-	for p.numMessagesSend >= p.numMessagesHandled.Load()+uint64(p.maxOutstanding) {
+	for p.batchId >= p.numBatchesHandled.Load()+uint64(p.maxOutstanding) {
 		time.Sleep(100 * time.Microsecond)
 		timeWaited += 100 * time.Microsecond
 		if timeWaited >= time.Second {
-			return errors.New("Timed out waiting for enough acks")
+			// assume all outstanding batches have been lost and will never get acked
+			break
 		}
 	}
 	sentSuccessfully := false
@@ -242,17 +241,17 @@ func (p *Producer) sendBytesOverNetwork(header []byte) error {
 
 func (p *Producer) UpdateAcknowledged(ack *pb.ProduceAck) {
 	expectedBatch := <-p.outstandingBatches
-	numHandled := len(expectedBatch.Messages)
+	numBatchesHandled := 1
 	for expectedBatch.BatchId < ack.BatchId {
 		p.AsyncError <- ProducerError{
 			Batch: &expectedBatch,
 			Err:   fmt.Errorf("Received wrong ack. expected %d, got %d. Probably lost the messages in between", expectedBatch.BatchId, ack.BatchId),
 		}
 		expectedBatch = <-p.outstandingBatches
-		numHandled += len(expectedBatch.Messages)
+		numBatchesHandled++
 	}
-	newNumHandled := p.numMessagesHandled.Load() + uint64(numHandled)
-	p.numMessagesHandled.Store(newNumHandled)
+	newNumHandled := p.numBatchesHandled.Load() + uint64(numBatchesHandled)
+	p.numBatchesHandled.Store(newNumHandled)
 	if p.measureLatencies.Load() && p.waiting.Load() {
 		if ack.BatchId == p.waitingForBatchId {
 			p.ackTimes = append(p.ackTimes, latencyMeasurement{

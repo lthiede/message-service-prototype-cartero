@@ -63,7 +63,7 @@ func waitForAcks(expectedNumAck int, producer *client.Producer) error {
 }
 
 func produce(numberMessages int, partitionName string, client *client.Client, maxInFlight int, outputLSN *maxLSN, wg *sync.WaitGroup, errChan chan<- error) {
-	producer, err := client.NewProducer(partitionName, 1024)
+	producer, err := client.NewProducer(partitionName, 8)
 	if err != nil {
 		errChan <- err
 		wg.Done()

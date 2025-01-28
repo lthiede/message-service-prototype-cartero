@@ -21,7 +21,7 @@ import (
 
 const measurementPeriod = 10 * time.Second
 const basePartitionName = "partition"
-const maxOutstandingAsync uint32 = 524288
+const maxOutstandingAsync uint32 = 3
 const numPossiblePayloads = 1000
 
 var possiblePayloads [][]byte = make([][]byte, numPossiblePayloads)
@@ -313,7 +313,7 @@ func oneClient(partitionName string, maxBatchSize int, messages float64, c *clie
 	producer.MaxPublishDelay = 0 // turns off publishing on a timer
 	logger.Info("Starting experiment")
 	experimentScheduler, quitExperiment := timer(time.Duration(2*int64(experimentDuration))+time.Second, messages)
-	measurements := measure(producer, logger)
+	measurements := measure(producer)
 experiment:
 	for {
 		select {
@@ -381,7 +381,7 @@ func timer(duration time.Duration, messages float64) (<-chan struct{}, <-chan st
 	return scheduler, quit
 }
 
-func measure(producer *client.Producer, logger *zap.Logger) chan clientResult {
+func measure(producer *client.Producer) chan clientResult {
 	messagesSent := make(chan clientResult)
 	go func() {
 		numMeasurements := int(experimentDuration.Seconds() / measurementPeriod.Seconds())

@@ -30,8 +30,9 @@ type Producer struct {
 	epoch int
 	lock  sync.Mutex
 	dead  bool
-	// Keeping track of outstanding and acks
+	// Keeping track of sent, outstanding and acks
 	lastLSNPlus1       atomic.Uint64
+	numMessagesSent    atomic.Uint64
 	numMessagesAck     atomic.Uint64 // doesn't include lost messages or lost acks
 	numBatchesHandled  atomic.Uint64 // includes lost messages or lost acks
 	outstandingBatches chan Batch
@@ -209,6 +210,7 @@ func (p *Producer) sendBatch() error {
 		Messages: p.messages,
 		BatchId:  p.batchId,
 	}
+	p.numMessagesSent.Add(1)
 	p.batchId++
 	p.endOffsetsExclusively = nil
 	p.messages = nil
@@ -250,8 +252,7 @@ func (p *Producer) UpdateAcknowledged(ack *pb.ProduceAck) {
 		expectedBatch = <-p.outstandingBatches
 		numBatchesHandled++
 	}
-	newNumHandled := p.numBatchesHandled.Load() + uint64(numBatchesHandled)
-	p.numBatchesHandled.Store(newNumHandled)
+	p.numBatchesHandled.Add(uint64(numBatchesHandled))
 	if p.measureLatencies.Load() && p.waiting.Load() {
 		if ack.BatchId == p.waitingForBatchId {
 			p.ackTimes = append(p.ackTimes, latencyMeasurement{
@@ -265,8 +266,11 @@ func (p *Producer) UpdateAcknowledged(ack *pb.ProduceAck) {
 		}
 	}
 	p.lastLSNPlus1.Store(ack.StartLsn + uint64(ack.NumMessages))
-	newNumMessagesAck := p.numMessagesAck.Load() + uint64(ack.NumMessages)
-	p.numMessagesAck.Store(newNumMessagesAck)
+	p.numMessagesAck.Add(uint64(ack.NumMessages))
+}
+
+func (p *Producer) NumMessagesSent() uint64 {
+	return p.numMessagesSent.Load()
 }
 
 func (p *Producer) NumMessagesAck() uint64 {

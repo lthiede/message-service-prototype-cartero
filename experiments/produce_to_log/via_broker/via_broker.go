@@ -386,11 +386,11 @@ func measure(producer *client.Producer) chan clientResult {
 	go func() {
 		numMeasurements := int(experimentDuration.Seconds() / measurementPeriod.Seconds())
 		messagesPerSecondMeasurements := make([]float64, 0, 2*numMeasurements)
-		startNumMessages := producer.NumMessagesAck()
+		startNumMessages := producer.NumMessagesSent()
 		for range numMeasurements {
 			start := time.Now()
 			time.Sleep(measurementPeriod)
-			endNumMessages := producer.NumMessagesAck()
+			endNumMessages := producer.NumMessagesSent()
 			duration := time.Since(start)
 			messagesPerSecondMeasurements = append(messagesPerSecondMeasurements, float64(endNumMessages-startNumMessages)/duration.Seconds())
 			startNumMessages = endNumMessages
@@ -399,7 +399,7 @@ func measure(producer *client.Producer) chan clientResult {
 		for range numMeasurements {
 			start := time.Now()
 			time.Sleep(measurementPeriod)
-			endNumMessages := producer.NumMessagesAck()
+			endNumMessages := producer.NumMessagesSent()
 			duration := time.Since(start)
 			messagesPerSecondMeasurements = append(messagesPerSecondMeasurements, float64(endNumMessages-startNumMessages)/duration.Seconds())
 			startNumMessages = endNumMessages

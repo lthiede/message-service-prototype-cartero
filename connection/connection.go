@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net"
+	"time"
 
 	"github.com/lthiede/cartero/consume"
 	"github.com/lthiede/cartero/partition"
@@ -68,7 +69,19 @@ func New(conn net.Conn, partitionManager *partitionmanager.PartitionManager, log
 }
 
 func (c *Connection) handleRequests() {
+	start := time.Now()
+	minutesPassed := 0
 	for {
+		if int(time.Since(start).Minutes()) > minutesPassed {
+			minutesPassed++
+			randomInt := rand.IntN(32)
+			if randomInt == 0 || randomInt == 1 {
+				c.logger.Error("Simulating random failure")
+				c.logger.Info("Stop handling requests", zap.String("name", c.name))
+				c.Close()
+				return
+			}
+		}
 		request := &pb.Request{}
 		err := protodelim.UnmarshalFrom(&readertobytereader.ReaderByteReader{Reader: c.conn}, request)
 		if err != nil {

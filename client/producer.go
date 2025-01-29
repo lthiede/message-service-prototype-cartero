@@ -156,10 +156,10 @@ func (p *Producer) scheduleSend(epoch int) {
 		if !p.dead && len(p.messages) != 0 {
 			err := p.sendBatch()
 			if err != nil {
-				p.AsyncError <- ProducerError{
+				p.sendAsyncError(ProducerError{
 					Batch: nil,
 					Err:   fmt.Errorf("failed to asynchronously send batch: %v. batch is kept in producer", err),
-				}
+				})
 			}
 		}
 	}
@@ -242,16 +242,16 @@ func (p *Producer) sendBytesOverNetwork(header []byte) error {
 }
 
 func (p *Producer) UpdateAcknowledged(ack *pb.ProduceAck) {
-	p.client.logger.Info("Trying to receive outstanding batch")
 	expectedBatch := <-p.outstandingBatches
 	numBatchesHandled := 1
 	for expectedBatch.BatchId < ack.BatchId {
-		p.client.logger.Info("Trying to return async error")
-		p.AsyncError <- ProducerError{
+		err := p.sendAsyncError(ProducerError{
 			Batch: &expectedBatch,
 			Err:   fmt.Errorf("Received wrong ack. expected %d, got %d. Probably lost the messages in between", expectedBatch.BatchId, ack.BatchId),
+		})
+		if err != nil {
+			return
 		}
-		p.client.logger.Info("Trying to receive outstanding batch")
 		expectedBatch = <-p.outstandingBatches
 		numBatchesHandled++
 	}
@@ -270,6 +270,17 @@ func (p *Producer) UpdateAcknowledged(ack *pb.ProduceAck) {
 	}
 	p.lastLSNPlus1.Store(ack.StartLsn + uint64(ack.NumMessages))
 	p.numMessagesAck.Add(uint64(ack.NumMessages))
+}
+
+func (p *Producer) sendAsyncError(err ProducerError) (retErr error) {
+	defer func() {
+		if err := recover(); err != nil {
+			p.client.logger.Error("Caught error", zap.Any("err", err))
+		}
+		retErr = errors.New("Producer already closed")
+	}()
+	p.AsyncError <- err
+	return nil
 }
 
 func (p *Producer) NumMessagesSent() uint64 {
@@ -305,6 +316,8 @@ func (p *Producer) StopMeasuringLatencies() []time.Duration {
 
 func (p *Producer) Close() error {
 	p.client.logger.Info("Finished produce call", zap.String("partitionName", p.partitionName))
+
+	close(p.AsyncError)
 
 	p.client.producersRWMutex.Lock()
 	delete(p.client.producers, p.partitionName)

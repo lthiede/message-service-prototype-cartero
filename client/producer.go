@@ -210,7 +210,7 @@ func (p *Producer) sendBatch() error {
 		Messages: p.messages,
 		BatchId:  p.batchId,
 	}
-	p.numMessagesSent.Add(1)
+	p.numMessagesSent.Add(uint64(len(p.messages)))
 	p.batchId++
 	p.endOffsetsExclusively = nil
 	p.messages = nil

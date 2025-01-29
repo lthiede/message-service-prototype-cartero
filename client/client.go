@@ -84,14 +84,17 @@ func (c *Client) handleResponses() {
 			switch res := response.Response.(type) {
 			case *pb.Response_ProduceAck:
 				produceAck := res.ProduceAck
+				c.logger.Info("Trying to shared lock producers map")
 				c.producersRWMutex.RLock()
 				p, ok := c.producers[produceAck.PartitionName]
 				if !ok {
 					c.logger.Error("Partition not recognized", zap.String("partitionName", produceAck.PartitionName))
+					c.logger.Info("Shared unlocking producers map")
 					c.producersRWMutex.RUnlock()
 					continue
 				}
 				p.UpdateAcknowledged(produceAck)
+				c.logger.Info("Shared unlocking producers map")
 				c.producersRWMutex.RUnlock()
 			case *pb.Response_ConsumeResponse:
 				consumeRes := res.ConsumeResponse
@@ -149,6 +152,7 @@ func (c *Client) restoreConnection(failureEpoch uint64) error {
 	c.connWriteMutex.Lock()
 	defer c.connWriteMutex.Unlock()
 	if failureEpoch < c.epoch {
+		c.logger.Info("already restored connection")
 		return nil
 	}
 	c.logger.Info("Trying to restore connection")

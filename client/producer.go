@@ -242,13 +242,16 @@ func (p *Producer) sendBytesOverNetwork(header []byte) error {
 }
 
 func (p *Producer) UpdateAcknowledged(ack *pb.ProduceAck) {
+	p.client.logger.Info("Trying to receive outstanding batch")
 	expectedBatch := <-p.outstandingBatches
 	numBatchesHandled := 1
 	for expectedBatch.BatchId < ack.BatchId {
+		p.client.logger.Info("Trying to return async error")
 		p.AsyncError <- ProducerError{
 			Batch: &expectedBatch,
 			Err:   fmt.Errorf("Received wrong ack. expected %d, got %d. Probably lost the messages in between", expectedBatch.BatchId, ack.BatchId),
 		}
+		p.client.logger.Info("Trying to receive outstanding batch")
 		expectedBatch = <-p.outstandingBatches
 		numBatchesHandled++
 	}

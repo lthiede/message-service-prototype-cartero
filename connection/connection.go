@@ -70,17 +70,14 @@ func New(conn net.Conn, partitionManager *partitionmanager.PartitionManager, log
 
 func (c *Connection) handleRequests() {
 	start := time.Now()
-	minutesPassed := 0
+	timeSlicesPassed := 0
 	for {
-		if int(time.Since(start).Minutes()) > minutesPassed {
-			minutesPassed++
-			randomInt := rand.IntN(32)
-			if randomInt == 0 || randomInt == 1 {
-				c.logger.Error("Simulating random failure")
-				c.logger.Info("Stop handling requests", zap.String("name", c.name))
-				c.Close()
-				return
-			}
+		if int(time.Since(start).Seconds())%10 > timeSlicesPassed {
+			timeSlicesPassed++
+			c.logger.Error("Simulating random failure")
+			c.logger.Info("Stop handling requests", zap.String("name", c.name))
+			c.Close()
+			return
 		}
 		request := &pb.Request{}
 		err := protodelim.UnmarshalFrom(&readertobytereader.ReaderByteReader{Reader: c.conn}, request)

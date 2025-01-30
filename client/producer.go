@@ -27,15 +27,16 @@ type Producer struct {
 	MaxBatchSize    uint32
 	maxOutstanding  uint32
 	// for sends due to max publish delay reached
-	epoch int
-	lock  sync.Mutex
-	dead  bool
+	maxPublichDelayEpoch int
+	lock                 sync.Mutex
+	dead                 bool
 	// Keeping track of sent, outstanding and acks
-	lastLSNPlus1       atomic.Uint64
-	numMessagesSent    atomic.Uint64
-	numMessagesAck     atomic.Uint64 // doesn't include lost messages or lost acks
-	numBatchesHandled  atomic.Uint64 // includes lost messages or lost acks
-	outstandingBatches chan Batch
+	outstandingBatchesNetworkEpoch uint64
+	lastLSNPlus1                   atomic.Uint64
+	numMessagesSent                atomic.Uint64
+	numMessagesAck                 atomic.Uint64 // doesn't include lost messages or lost acks
+	numBatchesHandled              atomic.Uint64 // includes lost messages or lost acks
+	outstandingBatches             chan Batch
 	// used by acks and sends due to max publish delay reached
 	AsyncError chan ProducerError
 	// for measuring latencies
@@ -133,12 +134,12 @@ func (p *Producer) addMessageToBatch(message []byte) error {
 			return fmt.Errorf("failed to send full batch: %v", err)
 		}
 		newPayloadSize = uint32(len(message))
-		p.epoch++
+		p.maxPublichDelayEpoch++
 	}
 	p.messages = append(p.messages, message)
 	p.endOffsetsExclusively = append(p.endOffsetsExclusively, newPayloadSize)
 	if len(p.messages) == 1 {
-		go p.scheduleSend(p.epoch)
+		go p.scheduleSend(p.maxPublichDelayEpoch)
 	}
 	return nil
 }
@@ -150,7 +151,7 @@ func (p *Producer) scheduleSend(epoch int) {
 	time.Sleep(p.MaxPublishDelay)
 	p.lock.Lock()
 	defer p.lock.Unlock()
-	if p.epoch == epoch {
+	if p.maxPublichDelayEpoch == epoch {
 		// p.client.logger.Info("Scheduled send")
 		// len equals 0 shouldn't happen because then the epoch should be increased
 		if !p.dead && len(p.messages) != 0 {
@@ -181,15 +182,15 @@ func (p *Producer) sendBatch() error {
 		return fmt.Errorf("failed to marshal batch: %v", err)
 	}
 	header := wireMessage.Bytes()
-	var timeWaited time.Duration
 	p.client.logger.Info("Waiting for max pending to send batch", zap.String("partitionName", p.partitionName))
-	for p.batchId >= p.numBatchesHandled.Load()+uint64(p.maxOutstanding) {
+	p.client.epochMutex.RLock()
+	currentConnectionEpoch := p.client.epoch
+	p.client.epochMutex.RUnlock()
+	for p.batchId >= p.numBatchesHandled.Load()+uint64(p.maxOutstanding) && p.outstandingBatchesNetworkEpoch == currentConnectionEpoch {
 		time.Sleep(100 * time.Microsecond)
-		timeWaited += 100 * time.Microsecond
-		if timeWaited >= time.Second {
-			// assume all outstanding batches have been lost and will never get acked
-			break
-		}
+		p.client.epochMutex.RLock()
+		currentConnectionEpoch = p.client.epoch
+		p.client.epochMutex.RUnlock()
 	}
 	sentSuccessfully := false
 	for !sentSuccessfully {
@@ -206,6 +207,7 @@ func (p *Producer) sendBatch() error {
 			}
 		} else {
 			sentSuccessfully = true
+			p.outstandingBatchesNetworkEpoch = potentialFailureEpoch
 		}
 	}
 	p.client.logger.Info("Waiting to send outstanding on channel", zap.String("partitionName", p.partitionName))

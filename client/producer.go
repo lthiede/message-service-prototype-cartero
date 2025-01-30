@@ -166,6 +166,7 @@ func (p *Producer) scheduleSend(epoch int) {
 }
 
 func (p *Producer) sendBatch() error {
+	p.client.logger.Info("called sendBatch", zap.String("partitionName", p.partitionName))
 	req := &pb.Request{
 		Request: &pb.Request_ProduceRequest{
 			ProduceRequest: &pb.ProduceRequest{
@@ -250,6 +251,7 @@ func (p *Producer) UpdateAcknowledged(ack *pb.ProduceAck) {
 			Err:   fmt.Errorf("Received wrong ack. expected %d, got %d. Probably lost the messages in between", expectedBatch.BatchId, ack.BatchId),
 		})
 		if err != nil {
+			p.client.logger.Info("Producer is already closed", zap.String("partitionName", p.partitionName))
 			return
 		}
 		expectedBatch = <-p.outstandingBatches
@@ -326,6 +328,8 @@ func (p *Producer) Close() error {
 	p.lock.Lock()
 	p.dead = true
 	p.lock.Unlock()
+
+	p.client.logger.Info("Closed producer", zap.String("partitionName", p.partitionName))
 
 	return nil
 }

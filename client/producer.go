@@ -260,17 +260,18 @@ func (p *Producer) UpdateAcknowledged(ack *pb.ProduceAck) {
 			Err:   fmt.Errorf("Received wrong ack. expected %d, got %d. Probably lost the messages in between", expectedBatch.BatchId, ack.BatchId),
 		})
 		if err != nil {
+			p.client.logger.Error("sendAsyncError returned error", zap.Error(err))
 			isProducerDead = true
 		}
 		p.client.logger.Info("Waiting for outstanding", zap.String("partitionName", p.partitionName), zap.Uint64("lostId", expectedBatch.BatchId))
 		expectedBatch = <-p.outstandingBatches
 		numBatchesHandled++
 	}
+	p.numBatchesHandled.Add(uint64(numBatchesHandled))
 	if isProducerDead {
 		p.client.logger.Info("Producer is already closed", zap.String("partitionName", p.partitionName))
 		return
 	}
-	p.numBatchesHandled.Add(uint64(numBatchesHandled))
 	if p.measureLatencies.Load() && p.waiting.Load() {
 		if ack.BatchId == p.waitingForBatchId {
 			p.ackTimes = append(p.ackTimes, latencyMeasurement{
@@ -292,7 +293,7 @@ func (p *Producer) sendAsyncError(err ProducerError) (retErr error) {
 		if err := recover(); err != nil {
 			p.client.logger.Error("Caught error", zap.Any("err", err))
 		}
-		retErr = errors.New("Producer already closed")
+		retErr = fmt.Errorf("Recovered from error: %v", err)
 	}()
 	p.AsyncError <- err
 	return nil

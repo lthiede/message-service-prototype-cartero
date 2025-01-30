@@ -182,6 +182,7 @@ func (p *Producer) sendBatch() error {
 	}
 	header := wireMessage.Bytes()
 	var timeWaited time.Duration
+	p.client.logger.Info("Waiting for max pending to send batch", zap.String("partitionName", p.partitionName))
 	for p.batchId >= p.numBatchesHandled.Load()+uint64(p.maxOutstanding) {
 		time.Sleep(100 * time.Microsecond)
 		timeWaited += 100 * time.Microsecond
@@ -192,6 +193,7 @@ func (p *Producer) sendBatch() error {
 	}
 	sentSuccessfully := false
 	for !sentSuccessfully {
+		p.client.logger.Info("Waiting for epoch mutex shared lock", zap.String("partitionName", p.partitionName))
 		p.client.epochMutex.RLock()
 		potentialFailureEpoch := p.client.epoch
 		err := p.sendBytesOverNetwork(header)
@@ -206,10 +208,12 @@ func (p *Producer) sendBatch() error {
 			sentSuccessfully = true
 		}
 	}
+	p.client.logger.Info("Waiting to send outstanding on channel", zap.String("partitionName", p.partitionName))
 	p.outstandingBatches <- Batch{
 		Messages: p.messages,
 		BatchId:  p.batchId,
 	}
+	p.client.logger.Info("Successfully produced", zap.String("partitionName", p.partitionName))
 	p.numMessagesSent.Add(uint64(len(p.messages)))
 	p.batchId++
 	p.endOffsetsExclusively = nil
@@ -218,6 +222,7 @@ func (p *Producer) sendBatch() error {
 }
 
 func (p *Producer) sendBytesOverNetwork(header []byte) error {
+	p.client.logger.Info("Waiting for connection exclusive lock", zap.String("partitionName", p.partitionName))
 	p.client.connWriteMutex.Lock()
 	defer p.client.connWriteMutex.Unlock()
 	if p.measureLatencies.Load() && !p.waiting.Load() {

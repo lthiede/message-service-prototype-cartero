@@ -182,12 +182,13 @@ func (p *Producer) sendBatch() error {
 		return fmt.Errorf("failed to marshal batch: %v", err)
 	}
 	header := wireMessage.Bytes()
-	p.client.logger.Info("Waiting for max pending to send batch", zap.String("partitionName", p.partitionName))
+	p.client.logger.Info("Waiting for epoch mutex shared lock for max pending", zap.String("partitionName", p.partitionName))
 	p.client.epochMutex.RLock()
 	currentConnectionEpoch := p.client.epoch
 	p.client.epochMutex.RUnlock()
 	for p.batchId >= p.numBatchesHandled.Load()+uint64(p.maxOutstanding) && p.outstandingBatchesNetworkEpoch == currentConnectionEpoch {
 		time.Sleep(100 * time.Microsecond)
+		p.client.logger.Info("Waiting for epoch mutex shared lock for max pending", zap.String("partitionName", p.partitionName), zap.Uint64("currentConnectionEpoch", currentConnectionEpoch))
 		p.client.epochMutex.RLock()
 		currentConnectionEpoch = p.client.epoch
 		p.client.epochMutex.RUnlock()
@@ -210,7 +211,7 @@ func (p *Producer) sendBatch() error {
 			p.outstandingBatchesNetworkEpoch = potentialFailureEpoch
 		}
 	}
-	p.client.logger.Info("Waiting to send outstanding on channel", zap.String("partitionName", p.partitionName))
+	p.client.logger.Info("Waiting to send outstanding on channel", zap.String("partitionName", p.partitionName), zap.Uint64("outstandingNetworkEpoch", p.outstandingBatchesNetworkEpoch))
 	p.outstandingBatches <- Batch{
 		Messages: p.messages,
 		BatchId:  p.batchId,

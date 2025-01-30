@@ -190,20 +190,14 @@ func (p *Producer) sendBatch() error {
 			break
 		}
 	}
-	p.client.logger.Info("About to send batch", zap.String("partitionName", p.partitionName))
 	sentSuccessfully := false
-	debug := false
 	for !sentSuccessfully {
-		if debug {
-			p.client.logger.Info("Retrying batch send", zap.String("partitionName", p.partitionName))
-		}
 		p.client.epochMutex.RLock()
 		potentialFailureEpoch := p.client.epoch
 		err := p.sendBytesOverNetwork(header)
 		p.client.epochMutex.RUnlock()
 		if err != nil {
 			p.client.logger.Error("Failed to send produce request or payload", zap.Error(err), zap.String("partitionName", p.partitionName))
-			debug = true
 			err := p.client.restoreConnection(potentialFailureEpoch)
 			if err != nil {
 				return fmt.Errorf("failed to recover from network failure: %v", err)
@@ -212,15 +206,9 @@ func (p *Producer) sendBatch() error {
 			sentSuccessfully = true
 		}
 	}
-	if debug {
-		p.client.logger.Info("Successfully sent batch", zap.String("partitionName", p.partitionName))
-	}
 	p.outstandingBatches <- Batch{
 		Messages: p.messages,
 		BatchId:  p.batchId,
-	}
-	if debug {
-		p.client.logger.Info("Passed outstanding batch on channel", zap.String("partitionName", p.partitionName))
 	}
 	p.numMessagesSent.Add(uint64(len(p.messages)))
 	p.batchId++
@@ -256,17 +244,21 @@ func (p *Producer) sendBytesOverNetwork(header []byte) error {
 func (p *Producer) UpdateAcknowledged(ack *pb.ProduceAck) {
 	expectedBatch := <-p.outstandingBatches
 	numBatchesHandled := 1
+	isProducerDead := false
 	for expectedBatch.BatchId < ack.BatchId {
 		err := p.sendAsyncError(ProducerError{
 			Batch: &expectedBatch,
 			Err:   fmt.Errorf("Received wrong ack. expected %d, got %d. Probably lost the messages in between", expectedBatch.BatchId, ack.BatchId),
 		})
 		if err != nil {
-			p.client.logger.Info("Producer is already closed", zap.String("partitionName", p.partitionName))
-			return
+			isProducerDead = true
 		}
 		expectedBatch = <-p.outstandingBatches
 		numBatchesHandled++
+	}
+	if isProducerDead {
+		p.client.logger.Info("Producer is already closed", zap.String("partitionName", p.partitionName))
+		return
 	}
 	p.numBatchesHandled.Add(uint64(numBatchesHandled))
 	if p.measureLatencies.Load() && p.waiting.Load() {

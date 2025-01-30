@@ -298,6 +298,7 @@ func oneClient(partitionName string, messages float64, c *client.Client, logger 
 	logger.Info("Starting experiment")
 	experimentScheduler, quitExperiment := timer(time.Duration(2*int64(experimentDuration))+time.Second, messages)
 	measurements := measure(producer)
+	receiveAsyncErrors(producer, logger)
 experiment:
 	for {
 		select {
@@ -309,9 +310,6 @@ experiment:
 		case <-quitExperiment:
 			logger.Info("Finished experiment")
 			break experiment
-		case producerErr := <-producer.AsyncError:
-			err := producerErr.Err
-			logger.Error("Async error in producer", zap.Error(err))
 		}
 	}
 	r, ok := <-measurements
@@ -395,4 +393,16 @@ func measure(producer *client.Producer) chan clientResult {
 		}
 	}()
 	return messagesSent
+}
+
+func receiveAsyncErrors(producer *client.Producer, logger *zap.Logger) {
+	go func() {
+		for {
+			producerErr, ok := <-producer.AsyncError
+			if !ok {
+				return
+			}
+			logger.Error("Async error in producer", zap.Error(producerErr.Err))
+		}
+	}()
 }

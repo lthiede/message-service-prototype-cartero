@@ -149,6 +149,7 @@ func (c *Client) restoreConnection(failureEpoch uint64) error {
 	c.connWriteMutex.Lock()
 	defer c.connWriteMutex.Unlock()
 	if failureEpoch < c.epoch {
+		c.logger.Info("Nothing to do, connection already restored")
 		return nil
 	}
 	c.logger.Info("Trying to restore connection")

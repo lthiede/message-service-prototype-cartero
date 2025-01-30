@@ -192,13 +192,18 @@ func (p *Producer) sendBatch() error {
 		}
 	}
 	sentSuccessfully := false
+	debug := false
 	for !sentSuccessfully {
+		if debug {
+			p.client.logger.Info("Retrying batch send", zap.String("partitionName", p.partitionName))
+		}
 		p.client.epochMutex.RLock()
 		potentialFailureEpoch := p.client.epoch
 		err := p.sendBytesOverNetwork(header)
 		p.client.epochMutex.RUnlock()
 		if err != nil {
-			p.client.logger.Error("Failed to send produce request or payload", zap.Error(err))
+			p.client.logger.Error("Failed to send produce request or payload", zap.Error(err), zap.String("partitionName", p.partitionName))
+			debug = true
 			err := p.client.restoreConnection(potentialFailureEpoch)
 			if err != nil {
 				return fmt.Errorf("failed to recover from network failure: %v", err)
@@ -207,9 +212,15 @@ func (p *Producer) sendBatch() error {
 			sentSuccessfully = true
 		}
 	}
+	if debug {
+		p.client.logger.Info("Successfully sent batch", zap.String("partitionName", p.partitionName))
+	}
 	p.outstandingBatches <- Batch{
 		Messages: p.messages,
 		BatchId:  p.batchId,
+	}
+	if debug {
+		p.client.logger.Info("Passed outstanding batch on channel", zap.String("partitionName", p.partitionName))
 	}
 	p.numMessagesSent.Add(uint64(len(p.messages)))
 	p.batchId++

@@ -249,10 +249,8 @@ func (p *Producer) sendBytesOverNetwork(header []byte) error {
 	return nil
 }
 
-func (p *Producer) UpdateAcknowledged(ack *pb.ProduceAck, debug bool) {
-	if debug {
-		p.client.logger.Info("Waiting for outstanding", zap.String("partitionName", p.partitionName))
-	}
+func (p *Producer) UpdateAcknowledged(ack *pb.ProduceAck) {
+	p.client.logger.Info("Waiting for outstanding", zap.String("partitionName", p.partitionName), zap.Uint64("ackedId", ack.BatchId))
 	expectedBatch := <-p.outstandingBatches
 	numBatchesHandled := 1
 	isProducerDead := false
@@ -264,9 +262,7 @@ func (p *Producer) UpdateAcknowledged(ack *pb.ProduceAck, debug bool) {
 		if err != nil {
 			isProducerDead = true
 		}
-		if debug {
-			p.client.logger.Info("Waiting for outstanding", zap.String("partitionName", p.partitionName))
-		}
+		p.client.logger.Info("Waiting for outstanding", zap.String("partitionName", p.partitionName), zap.Uint64("lostId", expectedBatch.BatchId))
 		expectedBatch = <-p.outstandingBatches
 		numBatchesHandled++
 	}

@@ -54,7 +54,6 @@ func New(address string, logger *zap.Logger) (*Client, error) {
 }
 
 func (c *Client) handleResponses() {
-	justRestored := false
 	for {
 		select {
 		case <-c.done:
@@ -62,16 +61,12 @@ func (c *Client) handleResponses() {
 			return
 		default:
 			response := &pb.Response{}
-			if justRestored {
-				c.logger.Info("Client waiting for epoch mutex shared lock")
-			}
+			c.logger.Info("Client waiting for epoch mutex shared lock")
 			c.epochMutex.RLock()
 			potentialFailureEpoch := c.epoch
 			epochConn := c.conn
 			c.epochMutex.RUnlock()
-			if justRestored {
-				c.logger.Info("Client waiting for ack")
-			}
+			c.logger.Info("Client waiting for ack")
 			err := protodelim.UnmarshalFrom(&readertobytereader.ReaderByteReader{Reader: epochConn}, response)
 			if err != nil {
 				c.logger.Error("Failed to unmarshal response", zap.Error(err))
@@ -85,16 +80,13 @@ func (c *Client) handleResponses() {
 						c.logger.Error("Failed to restore connection", zap.Error(err))
 						return
 					}
-					justRestored = true
 					continue
 				}
 			}
 			switch res := response.Response.(type) {
 			case *pb.Response_ProduceAck:
 				produceAck := res.ProduceAck
-				if justRestored {
-					c.logger.Info("Client waiting for producers map shared lock")
-				}
+				c.logger.Info("Client waiting for producers map shared lock")
 				c.producersRWMutex.RLock()
 				p, ok := c.producers[produceAck.PartitionName]
 				if !ok {
@@ -102,7 +94,7 @@ func (c *Client) handleResponses() {
 					c.producersRWMutex.RUnlock()
 					continue
 				}
-				p.UpdateAcknowledged(produceAck, justRestored)
+				p.UpdateAcknowledged(produceAck)
 				c.producersRWMutex.RUnlock()
 			case *pb.Response_ConsumeResponse:
 				consumeRes := res.ConsumeResponse

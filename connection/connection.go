@@ -72,7 +72,7 @@ func (c *Connection) handleRequests() {
 	start := time.Now()
 	timeSlicesPassed := 0
 	for {
-		if int(time.Since(start).Seconds())%10 > timeSlicesPassed {
+		if int(time.Since(start).Seconds()/10) > timeSlicesPassed {
 			timeSlicesPassed++
 			c.logger.Error("Simulating random failure")
 			c.logger.Info("Stop handling requests", zap.String("name", c.name))

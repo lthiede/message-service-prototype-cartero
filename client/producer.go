@@ -290,10 +290,9 @@ func (p *Producer) UpdateAcknowledged(ack *pb.ProduceAck) {
 
 func (p *Producer) sendAsyncError(err ProducerError) (retErr error) {
 	defer func() {
-		if err := recover(); err != nil {
-			p.client.logger.Error("Caught error", zap.Any("err", err))
+		if channelSendErr := recover(); channelSendErr != nil {
+			retErr = fmt.Errorf("Recovered from error: %v", channelSendErr)
 		}
-		retErr = fmt.Errorf("Recovered from error: %v", err)
 	}()
 	p.AsyncError <- err
 	return nil

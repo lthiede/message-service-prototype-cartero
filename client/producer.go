@@ -182,20 +182,17 @@ func (p *Producer) sendBatch() error {
 		return fmt.Errorf("failed to marshal batch: %v", err)
 	}
 	header := wireMessage.Bytes()
-	p.client.logger.Info("Waiting for epoch mutex shared lock for max pending", zap.String("partitionName", p.partitionName))
 	p.client.epochMutex.RLock()
 	currentConnectionEpoch := p.client.epoch
 	p.client.epochMutex.RUnlock()
 	for p.batchId >= p.numBatchesHandled.Load()+uint64(p.maxOutstanding) && p.outstandingBatchesNetworkEpoch == currentConnectionEpoch {
 		time.Sleep(100 * time.Microsecond)
-		p.client.logger.Info("Waiting for epoch mutex shared lock for max pending", zap.String("partitionName", p.partitionName), zap.Uint64("currentConnectionEpoch", currentConnectionEpoch))
 		p.client.epochMutex.RLock()
 		currentConnectionEpoch = p.client.epoch
 		p.client.epochMutex.RUnlock()
 	}
 	sentSuccessfully := false
 	for !sentSuccessfully {
-		p.client.logger.Info("Waiting for epoch mutex shared lock", zap.String("partitionName", p.partitionName))
 		p.client.epochMutex.RLock()
 		potentialFailureEpoch := p.client.epoch
 		err := p.sendBytesOverNetwork(header)
@@ -211,12 +208,10 @@ func (p *Producer) sendBatch() error {
 			p.outstandingBatchesNetworkEpoch = potentialFailureEpoch
 		}
 	}
-	p.client.logger.Info("Waiting to send outstanding on channel", zap.String("partitionName", p.partitionName), zap.Uint64("outstandingNetworkEpoch", p.outstandingBatchesNetworkEpoch), zap.Uint64("batchId", p.batchId))
 	p.outstandingBatches <- Batch{
 		Messages: p.messages,
 		BatchId:  p.batchId,
 	}
-	p.client.logger.Info("Successfully produced", zap.String("partitionName", p.partitionName))
 	p.numMessagesSent.Add(uint64(len(p.messages)))
 	p.batchId++
 	p.endOffsetsExclusively = nil
@@ -225,7 +220,6 @@ func (p *Producer) sendBatch() error {
 }
 
 func (p *Producer) sendBytesOverNetwork(header []byte) error {
-	p.client.logger.Info("Waiting for connection exclusive lock", zap.String("partitionName", p.partitionName))
 	p.client.connWriteMutex.Lock()
 	defer p.client.connWriteMutex.Unlock()
 	if p.measureLatencies.Load() && !p.waiting.Load() {
@@ -250,7 +244,6 @@ func (p *Producer) sendBytesOverNetwork(header []byte) error {
 }
 
 func (p *Producer) UpdateAcknowledged(ack *pb.ProduceAck) {
-	p.client.logger.Info("Waiting for outstanding", zap.String("partitionName", p.partitionName), zap.Uint64("ackedId", ack.BatchId))
 	expectedBatch := <-p.outstandingBatches
 	numBatchesHandled := 1
 	isProducerDead := false
@@ -263,13 +256,11 @@ func (p *Producer) UpdateAcknowledged(ack *pb.ProduceAck) {
 			p.client.logger.Error("sendAsyncError returned error", zap.Error(err))
 			isProducerDead = true
 		}
-		p.client.logger.Info("Waiting for outstanding", zap.String("partitionName", p.partitionName), zap.Uint64("lostId", expectedBatch.BatchId))
 		expectedBatch = <-p.outstandingBatches
 		numBatchesHandled++
 	}
 	p.numBatchesHandled.Add(uint64(numBatchesHandled))
 	if isProducerDead {
-		p.client.logger.Info("Producer is already closed", zap.String("partitionName", p.partitionName))
 		return
 	}
 	if p.measureLatencies.Load() && p.waiting.Load() {

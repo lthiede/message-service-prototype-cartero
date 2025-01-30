@@ -61,12 +61,10 @@ func (c *Client) handleResponses() {
 			return
 		default:
 			response := &pb.Response{}
-			c.logger.Info("Client waiting for epoch mutex shared lock")
 			c.epochMutex.RLock()
 			potentialFailureEpoch := c.epoch
 			epochConn := c.conn
 			c.epochMutex.RUnlock()
-			c.logger.Info("Client waiting for ack")
 			err := protodelim.UnmarshalFrom(&readertobytereader.ReaderByteReader{Reader: epochConn}, response)
 			if err != nil {
 				c.logger.Error("Failed to unmarshal response", zap.Error(err))
@@ -86,7 +84,6 @@ func (c *Client) handleResponses() {
 			switch res := response.Response.(type) {
 			case *pb.Response_ProduceAck:
 				produceAck := res.ProduceAck
-				c.logger.Info("Client waiting for producers map shared lock")
 				c.producersRWMutex.RLock()
 				p, ok := c.producers[produceAck.PartitionName]
 				if !ok {

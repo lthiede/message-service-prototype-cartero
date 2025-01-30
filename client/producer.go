@@ -211,7 +211,7 @@ func (p *Producer) sendBatch() error {
 			p.outstandingBatchesNetworkEpoch = potentialFailureEpoch
 		}
 	}
-	p.client.logger.Info("Waiting to send outstanding on channel", zap.String("partitionName", p.partitionName), zap.Uint64("outstandingNetworkEpoch", p.outstandingBatchesNetworkEpoch))
+	p.client.logger.Info("Waiting to send outstanding on channel", zap.String("partitionName", p.partitionName), zap.Uint64("outstandingNetworkEpoch", p.outstandingBatchesNetworkEpoch), zap.Uint64("batchId", p.batchId))
 	p.outstandingBatches <- Batch{
 		Messages: p.messages,
 		BatchId:  p.batchId,
@@ -263,6 +263,9 @@ func (p *Producer) UpdateAcknowledged(ack *pb.ProduceAck, debug bool) {
 		})
 		if err != nil {
 			isProducerDead = true
+		}
+		if debug {
+			p.client.logger.Info("Waiting for outstanding", zap.String("partitionName", p.partitionName))
 		}
 		expectedBatch = <-p.outstandingBatches
 		numBatchesHandled++

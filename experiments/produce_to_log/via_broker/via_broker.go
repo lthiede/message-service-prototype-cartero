@@ -29,15 +29,15 @@ var experimentDuration time.Duration
 type stringSlice []string
 
 var logAddressFlag stringSlice // o
-var pFlag = flag.Int("p", 8, "number of partitions")
-var nFlag = flag.Int("n", 8, "network connections to broker")
-var mFlag = flag.Int("m", 1000, "messages per second")
-var lFlag = flag.Int("l", 3800, "bytes per message")
-var aFlag = flag.Int("a", 0, "max number of bytes per batch")
-var cFlag = flag.Int("c", 1, "max pending batches per producer")
-var eFlag = flag.Int("e", 60, "experiment and warmup duration")
-var sFlag = flag.String("s", "localhost:8080", "server address")
-var bFlag = flag.Bool("b", false, "create the server")
+var partitionsFlag = flag.Int("p", 8, "number of partitions")
+var connectionsFlag = flag.Int("n", 8, "network connections to broker")
+var messageRateFlag = flag.Int("m", 1000, "messages per second")
+var messageSizeFlag = flag.Int("l", 3800, "bytes per message")
+var batchSizeFlag = flag.Int("a", 0, "max number of bytes per batch")
+var maxPendingFlag = flag.Int("c", 1, "max pending batches per producer")
+var durationFlag = flag.Int("e", 60, "experiment and warmup duration")
+var serverAddressFlag = flag.String("s", "localhost:8080", "server address")
+var createServerFlag = flag.Bool("b", false, "create the server")
 
 func (n *stringSlice) String() string {
 	return fmt.Sprintf("%v", []string(*n))
@@ -76,8 +76,8 @@ func main() {
 	if err != nil {
 		return
 	}
-	experimentDuration = time.Duration(*eFlag * int(time.Second))
-	// if *bFlag {
+	experimentDuration = time.Duration(*durationFlag * int(time.Second))
+	// if *createServerFlag {
 	// 	logger, err := zap.NewDevelopment()
 	// 	if err != nil {
 	// 		fmt.Printf("Failed to create logger: %v", err)
@@ -91,11 +91,11 @@ func main() {
 	// 	defer server.Close()
 	// }
 	for i := range numPossiblePayloads {
-		payload := make([]byte, *lFlag)
+		payload := make([]byte, *messageSizeFlag)
 		n, err := cryptorand.Read(payload)
-		if n != *lFlag {
+		if n != *messageSizeFlag {
 			logger.Error("Failed to create possible message",
-				zap.Int("bytesPerMessage", *lFlag),
+				zap.Int("bytesPerMessage", *messageSizeFlag),
 				zap.Error(err),
 			)
 			return
@@ -105,87 +105,107 @@ func main() {
 	result, err := oneRun(logger)
 	if err != nil {
 		logger.Error("Run failed",
-			zap.Int("numPartitions", *pFlag),
-			zap.Int("numConnections", *nFlag),
-			zap.Int("bytesPerMessage", *lFlag),
-			zap.Int("maxBytesPerBatch", *aFlag),
-			zap.Int("messagesPerSecond", *mFlag),
+			zap.Int("numPartitions", *partitionsFlag),
+			zap.Int("numConnections", *connectionsFlag),
+			zap.Int("bytesPerMessage", *messageSizeFlag),
+			zap.Int("maxBytesPerBatch", *batchSizeFlag),
+			zap.Int("messagesPerSecond", *messageRateFlag),
 			zap.Error(err))
 		return
 	}
 	text, err := json.Marshal(result)
 	if err != nil {
 		logger.Error("Marshal of results failed",
-			zap.Int("numPartitions", *pFlag),
-			zap.Int("numConnections", *nFlag),
-			zap.Int("bytesPerMessage", *lFlag),
-			zap.Int("maxBytesPerBatch", *aFlag),
-			zap.Int("messagesPerSecond", *mFlag),
+			zap.Int("numPartitions", *partitionsFlag),
+			zap.Int("numConnections", *connectionsFlag),
+			zap.Int("bytesPerMessage", *messageSizeFlag),
+			zap.Int("maxBytesPerBatch", *batchSizeFlag),
+			zap.Int("messagesPerSecond", *messageRateFlag),
 			zap.Error(err))
 		return
 	}
 	fmt.Println(string(text))
-	output, err := os.Create(fmt.Sprintf("results_%d_p_%d_c_%d_b_%d_b_%d_mxs.json", *pFlag, *nFlag, *lFlag, *aFlag, *mFlag))
+	output, err := os.Create(fmt.Sprintf("results_%d_p_%d_c_%d_b_%d_b_%d_mxs.json",
+		*partitionsFlag,
+		*connectionsFlag,
+		*messageSizeFlag,
+		*batchSizeFlag,
+		*messageRateFlag))
 	if err != nil {
 		logger.Error("Creating output file failed",
-			zap.Int("numPartitions", *pFlag),
-			zap.Int("numConnections", *nFlag),
-			zap.Int("bytesPerMessage", *lFlag),
-			zap.Int("maxBytesPerBatch", *aFlag),
-			zap.Int("messagesPerSecond", *mFlag),
+			zap.Int("numPartitions", *partitionsFlag),
+			zap.Int("numConnections", *connectionsFlag),
+			zap.Int("bytesPerMessage", *messageSizeFlag),
+			zap.Int("maxBytesPerBatch", *batchSizeFlag),
+			zap.Int("messagesPerSecond", *messageRateFlag),
 			zap.Error(err))
 		return
 	}
 	_, err = output.Write(text)
 	if err != nil {
 		logger.Error("Writing to output file failed",
-			zap.Int("numPartitions", *pFlag),
-			zap.Int("numConnections", *nFlag),
-			zap.Int("bytesPerMessage", *lFlag),
-			zap.Int("maxBytesPerBatch", *aFlag),
-			zap.Int("messagesPerSecond", *mFlag),
+			zap.Int("numPartitions", *partitionsFlag),
+			zap.Int("numConnections", *connectionsFlag),
+			zap.Int("bytesPerMessage", *messageSizeFlag),
+			zap.Int("maxBytesPerBatch", *batchSizeFlag),
+			zap.Int("messagesPerSecond", *messageRateFlag),
 			zap.Error(err))
 		return
 	}
 }
 
 func oneRun(logger *zap.Logger) (*Result, error) {
-	setupClient, err := createClient(fmt.Sprintf("./setup_client_%d_%d_%d_%d_%d", *pFlag, *nFlag, *lFlag, *aFlag, *mFlag))
+	setupClient, err := createClient(fmt.Sprintf("./setup_client_%d_%d_%d_%d_%d",
+		*partitionsFlag,
+		*connectionsFlag,
+		*messageSizeFlag,
+		*batchSizeFlag,
+		*messageRateFlag))
 	if err != nil {
 		return nil, fmt.Errorf("error creating client: %v", err)
 	}
 	defer setupClient.Close()
-	oneRunTopicName := fmt.Sprintf("%s_%d_%d_%d_%d_%d_", basePartitionName, *pFlag, *nFlag, *lFlag, *aFlag, *mFlag)
-	err = setupClient.CreatePartition(oneRunTopicName, uint32(*pFlag))
+	oneRunTopicName := fmt.Sprintf("%s_%d_%d_%d_%d_%d_", basePartitionName,
+		*partitionsFlag,
+		*connectionsFlag,
+		*messageSizeFlag,
+		*batchSizeFlag,
+		*messageRateFlag)
+	err = setupClient.CreatePartition(oneRunTopicName, uint32(*partitionsFlag))
 	if err != nil {
 		return nil, fmt.Errorf("error creating partitions: %v", err)
 	}
-	partitionNames := make([]string, *pFlag)
-	for i := range *pFlag {
+	partitionNames := make([]string, *partitionsFlag)
+	for i := range *partitionsFlag {
 		partitionNames[i] = fmt.Sprintf("%s%d", oneRunTopicName, i)
 	}
 	var numProducers int
-	if *nFlag > *pFlag {
-		numProducers = *nFlag
+	if *connectionsFlag > *partitionsFlag {
+		numProducers = *connectionsFlag
 	} else {
-		numProducers = *pFlag
+		numProducers = *partitionsFlag
 	}
 	returnChans := make([]chan clientResult, numProducers)
 	for i := range numProducers {
 		returnChans[i] = make(chan clientResult)
 	}
-	clients := make([]*client.Client, *nFlag)
-	for i := range *nFlag {
-		c, err := createClient(fmt.Sprintf("client_%d_%d_%d_%d_%d_%d", i, *pFlag, *nFlag, *lFlag, *aFlag, *mFlag))
+	clients := make([]*client.Client, *connectionsFlag)
+	for i := range *connectionsFlag {
+		c, err := createClient(fmt.Sprintf("client_%d_%d_%d_%d_%d_%d", i,
+			*partitionsFlag,
+			*connectionsFlag,
+			*messageSizeFlag,
+			*batchSizeFlag,
+			*messageRateFlag))
 		if err != nil {
 			return nil, fmt.Errorf("error creating client: %v", err)
 		}
 		clients[i] = c
 	}
 	for i := range numProducers {
-		partitionName := partitionNames[i%*pFlag]
-		c := clients[i%*cFlag]
-		go oneClient(partitionName, float64(*mFlag)/float64(numProducers), c, logger, returnChans[i])
+		partitionName := partitionNames[i%*partitionsFlag]
+		c := clients[i%*connectionsFlag]
+		go oneClient(partitionName, float64(*messageRateFlag)/float64(numProducers), c, logger, returnChans[i])
 	}
 	numMeasurements := int(experimentDuration.Seconds() / measurementPeriod.Seconds())
 	aggregatedMessagesPerSecond := make([]float64, numMeasurements)
@@ -202,7 +222,7 @@ func oneRun(logger *zap.Logger) (*Result, error) {
 		}
 		for i := range numMeasurements {
 			aggregatedMessagesPerSecond[i] += clientResult.MessagesPerSecondMeasurements[numMeasurements+i]
-			aggregatedBytesPerSecond[i] += clientResult.MessagesPerSecondMeasurements[numMeasurements+i] * float64(*lFlag)
+			aggregatedBytesPerSecond[i] += clientResult.MessagesPerSecondMeasurements[numMeasurements+i] * float64(*messageSizeFlag)
 		}
 		latencies = append(latencies, clientResult.LatencyMeasurements...)
 	}
@@ -210,7 +230,7 @@ func oneRun(logger *zap.Logger) (*Result, error) {
 		logger.Info("Closing client", zap.Int("clientNum", i))
 		c.Close()
 	}
-	err = setupClient.DeletePartition(oneRunTopicName, uint32(*pFlag))
+	err = setupClient.DeletePartition(oneRunTopicName, uint32(*partitionsFlag))
 	if err != nil {
 		return nil, fmt.Errorf("error deleting partitions: %v", err)
 	}
@@ -227,12 +247,12 @@ func oneRun(logger *zap.Logger) (*Result, error) {
 		Latency99Pct:                  pct(latencies, 0.99),
 		Latency999Pct:                 pct(latencies, 0.999),
 		Latency9999Pct:                pct(latencies, 0.9999),
-		MaxPending:                    *cFlag,
-		Partitions:                    *pFlag,
-		Connections:                   *nFlag,
-		MessageSize:                   *lFlag,
-		MaxBatchSize:                  *aFlag,
-		MessagesPerSecondConfigured:   *mFlag,
+		MaxPending:                    *maxPendingFlag,
+		Partitions:                    *partitionsFlag,
+		Connections:                   *connectionsFlag,
+		MessageSize:                   *messageSizeFlag,
+		MaxBatchSize:                  *batchSizeFlag,
+		MessagesPerSecondConfigured:   *messageRateFlag,
 	}, nil
 }
 
@@ -258,7 +278,7 @@ func createClient(name string) (*client.Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to build logger: %v", err)
 	}
-	c, err := client.New(*sFlag, logger)
+	c, err := client.New(*serverAddressFlag, logger)
 	if err != nil {
 		logger.Error("Error creating client", zap.Error(err))
 		return nil, fmt.Errorf("failed to create client: %v", err)
@@ -267,13 +287,13 @@ func createClient(name string) (*client.Client, error) {
 }
 
 func oneClient(partitionName string, messages float64, c *client.Client, logger *zap.Logger, messagesSent chan<- clientResult) {
-	producer, err := c.NewProducer(partitionName, uint32(*cFlag))
+	producer, err := c.NewProducer(partitionName, uint32(*maxPendingFlag))
 	if err != nil {
 		logger.Error("Error creating producer", zap.Error(err))
 		close(messagesSent)
 		return
 	}
-	producer.MaxBatchSize = uint32(*aFlag)
+	producer.MaxBatchSize = uint32(*batchSizeFlag)
 	producer.MaxPublishDelay = 0 // turns off publishing on a timer
 	logger.Info("Starting experiment")
 	experimentScheduler, quitExperiment := timer(time.Duration(2*int64(experimentDuration))+time.Second, messages)

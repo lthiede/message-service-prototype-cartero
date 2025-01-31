@@ -346,13 +346,12 @@ func timer(duration time.Duration, messages float64) (<-chan struct{}, <-chan st
 		scheduler <- struct{}{}
 		var numScheduled int64
 		waitTime := time.Duration(float64(int64(time.Second)) / messages)
-		closedQuit := false
 		start := time.Now()
 		for {
 			passed := time.Since(start)
-			if passed >= duration && !closedQuit {
-				closedQuit = true
+			if passed >= duration {
 				close(quit)
+				return
 			}
 			shouldBeScheduled := int64(passed) / int64(waitTime)
 		inner_loop:
@@ -361,11 +360,7 @@ func timer(duration time.Duration, messages float64) (<-chan struct{}, <-chan st
 				case scheduler <- struct{}{}:
 					numScheduled++
 				default:
-					if closedQuit {
-						return
-					} else {
-						break inner_loop
-					}
+					break inner_loop
 				}
 			}
 		}

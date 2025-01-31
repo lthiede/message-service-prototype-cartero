@@ -222,6 +222,7 @@ func (p *Producer) sendBatch() error {
 func (p *Producer) sendBytesOverNetwork(header []byte) error {
 	p.client.connWriteMutex.Lock()
 	defer p.client.connWriteMutex.Unlock()
+	p.client.conn.SetWriteDeadline(time.Now().Add(time.Second))
 	if p.measureLatencies.Load() && !p.waiting.Load() {
 		p.waitingForBatchId = p.batchId
 		p.waiting.Store(true)

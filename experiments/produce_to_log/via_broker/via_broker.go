@@ -49,21 +49,22 @@ func (n *stringSlice) Set(value string) error {
 }
 
 type Result struct {
-	MessagesPerSecondMeasurements []float64
-	BytesPerSecondMeasurements    []float64
-	NumLatencyMeasurements        int
-	Latency50Pct                  float64
-	Latency75Pct                  float64
-	Latency90Pct                  float64
-	Latency99Pct                  float64
-	Latency999Pct                 float64
-	Latency9999Pct                float64
-	MaxPending                    int
-	Partitions                    int
-	Connections                   int
-	MessageSize                   int
-	MaxBatchSize                  int
-	MessagesPerSecondConfigured   int
+	SentMessagesPerSecondMeasurements []float64
+	SentBytesPerSecondMeasurements    []float64
+	AckMessagesPerSecondMeasurements  []float64
+	NumLatencyMeasurements            int
+	Latency50Pct                      float64
+	Latency75Pct                      float64
+	Latency90Pct                      float64
+	Latency99Pct                      float64
+	Latency999Pct                     float64
+	Latency9999Pct                    float64
+	MaxPending                        int
+	Partitions                        int
+	Connections                       int
+	MessageSize                       int
+	MaxBatchSize                      int
+	MessagesPerSecondConfigured       int
 }
 
 func main() {
@@ -208,21 +209,28 @@ func oneRun(logger *zap.Logger) (*Result, error) {
 		go oneClient(partitionName, float64(*messageRateFlag)/float64(numProducers), c, logger, returnChans[i])
 	}
 	numMeasurements := int(experimentDuration.Seconds() / measurementPeriod.Seconds())
-	aggregatedMessagesPerSecond := make([]float64, numMeasurements)
+	aggregatedSentPerSecond := make([]float64, numMeasurements)
+	aggregatedAckPerSecond := make([]float64, numMeasurements)
 	aggregatedBytesPerSecond := make([]float64, numMeasurements)
 	latencies := make([]time.Duration, 0)
 	for i, r := range returnChans {
 		clientResult, ok := <-r
 		if !ok {
-			return nil, errors.New("one client wasn't successful")
+			return nil, errors.New("one producer wasn't successful")
 		}
-		logger.Info("Received results", zap.Int("clientNum", i))
-		if len(clientResult.MessagesPerSecondMeasurements) != numMeasurements*2 {
-			return nil, fmt.Errorf("client returned %d measurements but expected %d", len(clientResult.MessagesPerSecondMeasurements), numMeasurements*2)
+		logger.Info("Received results", zap.Int("producerNum", i))
+		if len(clientResult.SentPerSecondMeasurements) != numMeasurements*2 {
+			return nil, fmt.Errorf("client returned %d measurements of sent messages but expected %d",
+				len(clientResult.SentPerSecondMeasurements), numMeasurements*2)
+		}
+		if len(clientResult.AckPerSecondMeasurements) != numMeasurements*2 {
+			return nil, fmt.Errorf("client returned %d measurements of ack messages but expected %d",
+				len(clientResult.AckPerSecondMeasurements), numMeasurements*2)
 		}
 		for i := range numMeasurements {
-			aggregatedMessagesPerSecond[i] += clientResult.MessagesPerSecondMeasurements[numMeasurements+i]
-			aggregatedBytesPerSecond[i] += clientResult.MessagesPerSecondMeasurements[numMeasurements+i] * float64(*messageSizeFlag)
+			aggregatedSentPerSecond[i] += clientResult.SentPerSecondMeasurements[numMeasurements+i]
+			aggregatedBytesPerSecond[i] += clientResult.SentPerSecondMeasurements[numMeasurements+i] * float64(*messageSizeFlag)
+			aggregatedAckPerSecond[i] += clientResult.AckPerSecondMeasurements[numMeasurements+i]
 		}
 		latencies = append(latencies, clientResult.LatencyMeasurements...)
 	}
@@ -236,23 +244,24 @@ func oneRun(logger *zap.Logger) (*Result, error) {
 	}
 	logger.Info("Successfully deleted partition", zap.String("partitionName", oneRunTopicName))
 	slices.Sort(latencies)
-	logger.Info("Returning measurements", zap.Float64s("messagesPerSecond", aggregatedMessagesPerSecond))
+	logger.Info("Returning measurements", zap.Float64s("messagesPerSecond", aggregatedSentPerSecond))
 	return &Result{
-		MessagesPerSecondMeasurements: aggregatedMessagesPerSecond,
-		BytesPerSecondMeasurements:    aggregatedBytesPerSecond,
-		NumLatencyMeasurements:        len(latencies),
-		Latency50Pct:                  pct(latencies, 0.5),
-		Latency75Pct:                  pct(latencies, 0.75),
-		Latency90Pct:                  pct(latencies, 0.9),
-		Latency99Pct:                  pct(latencies, 0.99),
-		Latency999Pct:                 pct(latencies, 0.999),
-		Latency9999Pct:                pct(latencies, 0.9999),
-		MaxPending:                    *maxPendingFlag,
-		Partitions:                    *partitionsFlag,
-		Connections:                   *connectionsFlag,
-		MessageSize:                   *messageSizeFlag,
-		MaxBatchSize:                  *batchSizeFlag,
-		MessagesPerSecondConfigured:   *messageRateFlag,
+		SentMessagesPerSecondMeasurements: aggregatedSentPerSecond,
+		SentBytesPerSecondMeasurements:    aggregatedBytesPerSecond,
+		AckMessagesPerSecondMeasurements:  aggregatedAckPerSecond,
+		NumLatencyMeasurements:            len(latencies),
+		Latency50Pct:                      pct(latencies, 0.5),
+		Latency75Pct:                      pct(latencies, 0.75),
+		Latency90Pct:                      pct(latencies, 0.9),
+		Latency99Pct:                      pct(latencies, 0.99),
+		Latency999Pct:                     pct(latencies, 0.999),
+		Latency9999Pct:                    pct(latencies, 0.9999),
+		MaxPending:                        *maxPendingFlag,
+		Partitions:                        *partitionsFlag,
+		Connections:                       *connectionsFlag,
+		MessageSize:                       *messageSizeFlag,
+		MaxBatchSize:                      *batchSizeFlag,
+		MessagesPerSecondConfigured:       *messageRateFlag,
 	}, nil
 }
 
@@ -266,8 +275,9 @@ func pct(latencies []time.Duration, pct float64) float64 {
 }
 
 type clientResult struct {
-	MessagesPerSecondMeasurements []float64
-	LatencyMeasurements           []time.Duration
+	SentPerSecondMeasurements []float64
+	AckPerSecondMeasurements  []float64
+	LatencyMeasurements       []time.Duration
 }
 
 func createClient(name string) (*client.Client, error) {
@@ -367,29 +377,38 @@ func measure(producer *client.Producer) chan clientResult {
 	messagesSent := make(chan clientResult)
 	go func() {
 		numMeasurements := int(experimentDuration.Seconds() / measurementPeriod.Seconds())
-		messagesPerSecondMeasurements := make([]float64, 0, 2*numMeasurements)
-		startNumMessages := producer.NumMessagesSent()
+		sentPerSecondMeasurements := make([]float64, 0, 2*numMeasurements)
+		ackPerSecondMeasurements := make([]float64, 0, 2*numMeasurements)
+		startNumSent := producer.NumMessagesSent()
+		startNumAck := producer.NumMessagesAck()
 		for range numMeasurements {
 			start := time.Now()
 			time.Sleep(measurementPeriod)
-			endNumMessages := producer.NumMessagesSent()
+			endNumSent := producer.NumMessagesSent()
+			endNumAck := producer.NumMessagesAck()
 			duration := time.Since(start)
-			messagesPerSecondMeasurements = append(messagesPerSecondMeasurements, float64(endNumMessages-startNumMessages)/duration.Seconds())
-			startNumMessages = endNumMessages
+			sentPerSecondMeasurements = append(sentPerSecondMeasurements, float64(endNumSent-startNumSent)/duration.Seconds())
+			ackPerSecondMeasurements = append(ackPerSecondMeasurements, float64(endNumAck-startNumAck)/duration.Seconds())
+			startNumSent = endNumSent
+			startNumAck = endNumAck
 		}
 		producer.StartMeasuringLatencies()
 		for range numMeasurements {
 			start := time.Now()
 			time.Sleep(measurementPeriod)
-			endNumMessages := producer.NumMessagesSent()
+			endNumSent := producer.NumMessagesSent()
+			endNumAck := producer.NumMessagesAck()
 			duration := time.Since(start)
-			messagesPerSecondMeasurements = append(messagesPerSecondMeasurements, float64(endNumMessages-startNumMessages)/duration.Seconds())
-			startNumMessages = endNumMessages
+			sentPerSecondMeasurements = append(sentPerSecondMeasurements, float64(endNumSent-startNumSent)/duration.Seconds())
+			ackPerSecondMeasurements = append(ackPerSecondMeasurements, float64(endNumAck-startNumAck)/duration.Seconds())
+			startNumSent = endNumSent
+			startNumAck = endNumAck
 		}
 		latencies := producer.StopMeasuringLatencies()
 		messagesSent <- clientResult{
-			MessagesPerSecondMeasurements: messagesPerSecondMeasurements,
-			LatencyMeasurements:           latencies,
+			SentPerSecondMeasurements: sentPerSecondMeasurements,
+			AckPerSecondMeasurements:  ackPerSecondMeasurements,
+			LatencyMeasurements:       latencies,
 		}
 	}()
 	return messagesSent

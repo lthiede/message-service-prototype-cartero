@@ -186,7 +186,7 @@ func (p *Producer) sendBatch() error {
 	currentConnectionEpoch := p.client.epoch
 	p.client.epochMutex.RUnlock()
 	for p.batchId >= p.numBatchesHandled.Load()+uint64(p.maxOutstanding) && p.outstandingBatchesNetworkEpoch == currentConnectionEpoch {
-		time.Sleep(100 * time.Microsecond)
+		time.Sleep(20 * time.Microsecond)
 		p.client.epochMutex.RLock()
 		currentConnectionEpoch = p.client.epoch
 		p.client.epochMutex.RUnlock()

@@ -156,6 +156,7 @@ func (c *Client) restoreConnection(failureEpoch uint64) error {
 	if c.failed {
 		return errors.New("restoring connection already failed")
 	}
+	c.conn.Close()
 	dialer := &net.Dialer{}
 	conn, err := dialer.Dial("tcp", c.address)
 	if err != nil {
